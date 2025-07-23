@@ -1,4 +1,9 @@
 import logging
+import os
+import random
+import json
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -7,26 +12,26 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
+    ApplicationBuilder
 )
-from dotenv import load_dotenv
-import os
-import random
-import json
-from datetime import datetime, timedelta
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# تنظیمات لاگ
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# لود توکن از محیط
+# تنظیمات پایه
 load_dotenv()
 TOKEN = os.getenv("TOKEN", "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "5542927340"))
 TRX_ADDRESS = os.getenv("TRX_ADDRESS", "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://sea-2ri6.onrender.com")
+PORT = int(os.getenv("PORT", 8443))
 
-# وضعیت‌های کاربر
+# تنظیمات لاگ
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# حالت‌های بازی
 (
     STATE_MAIN_MENU,
     STATE_SHOP,
@@ -36,7 +41,7 @@ TRX_ADDRESS = os.getenv("TRX_ADDRESS", "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb")
     STATE_UPGRADE,
 ) = range(6)
 
-# دیتابیس ساده کاربران
+# دیتابیس موقت
 users_db = {}
 
 # انواع کشتی‌ها
@@ -66,9 +71,45 @@ SEA_EVENTS = [
     {"name": "دزدان دریایی", "reward": "battle", "chance": 0.05, "message": "دزدان دریایی به شما حمله کردند!"},
 ]
 
+# --- توابع کمکی ---
+def main_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("دریانوردی ⛵", callback_data="sail")],
+        [InlineKeyboardButton("فروشگاه 🏪", callback_data="shop")],
+        [InlineKeyboardButton("موجودی 💰", callback_data="inventory")],
+        [InlineKeyboardButton("ارتقاء کشتی ⚓", callback_data="upgrade")],
+        [InlineKeyboardButton("حمایت از ما 💝", callback_data="donate")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def save_user_data():
+    """ذخیره داده کاربران در فایل"""
+    try:
+        with open('user_data.json', 'w') as f:
+            json.dump(users_db, f, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving user data: {e}")
+
+def load_user_data():
+    """بارگذاری داده کاربران از فایل"""
+    try:
+        with open('user_data.json', 'r') as f:
+            data = json.load(f)
+            # تبدیل رشته‌های تاریخ به شیء datetime
+            for user_id, user_data in data.items():
+                if 'sailing_end' in user_data and user_data['sailing_end']:
+                    user_data['sailing_end'] = datetime.fromisoformat(user_data['sailing_end'])
+            return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    except Exception as e:
+        logger.error(f"Error loading user data: {e}")
+        return {}
+
+# --- دستورات اصلی ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    user_id = user.id
+    user_id = str(user.id)
     
     if user_id not in users_db:
         users_db[user_id] = {
@@ -80,267 +121,82 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "state": STATE_MAIN_MENU,
             "sailing_end": None,
             "battle": None,
+            "created_at": datetime.now().isoformat()
         }
-    
-    keyboard = [
-        [InlineKeyboardButton("دریانوردی ⛵", callback_data="sail")],
-        [InlineKeyboardButton("فروشگاه 🏪", callback_data="shop")],
-        [InlineKeyboardButton("موجودی 💰", callback_data="inventory")],
-        [InlineKeyboardButton("ارتقاء کشتی ⚓", callback_data="upgrade")],
-        [InlineKeyboardButton("حمایت از ما 💝", callback_data="donate")],
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        save_user_data()
     
     await update.message.reply_text(
         f"به دنیای دزدان دریایی خوش آمدید، کاپیتان {user.full_name}! 🏴‍☠️\n\n"
         "شما می‌توانید با دریانوردی به دنبال گنج باشید، کشتی خود را ارتقا دهید "
         "و با دیگر دزدان دریایی مبارزه کنید.\n\n"
         "گزینه مورد نظر را انتخاب کنید:",
-        reply_markup=reply_markup,
+        reply_markup=main_menu_keyboard(),
     )
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    
-    user_id = query.from_user.id
-    data = query.data
+    user_id = str(query.from_user.id)
     
     if user_id not in users_db:
         await start(update, context)
         return
     
+    data = query.data
     user_data = users_db[user_id]
     
     if data == "sail":
-        if user_data["energy"] < 10:
-            await query.edit_message_text(
-                "انرژی شما برای دریانوردی کافی نیست! استراحت کنید یا از جعبه کمک‌های اولیه استفاده کنید.",
-                reply_markup=main_menu_keyboard(),
-            )
-            return
-        
-        user_data["energy"] -= 10
-        duration = random.randint(5, 15)
-        user_data["sailing_end"] = datetime.now() + timedelta(seconds=duration)
-        user_data["state"] = STATE_SAILING
-        
-        await query.edit_message_text(
-            f"کشتی شما به دریا زده است! ⛵\n\n"
-            f"سفر دریایی حدود {duration} ثانیه طول خواهد کشید...",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
-        )
-        
+        await handle_sailing(query, user_data)
     elif data == "shop":
-        user_data["state"] = STATE_SHOP
         await show_shop(query, user_data)
-        
     elif data == "inventory":
-        user_data["state"] = STATE_INVENTORY
         await show_inventory(query, user_data)
-        
     elif data == "upgrade":
-        user_data["state"] = STATE_UPGRADE
         await show_upgrade(query, user_data)
-        
     elif data == "donate":
-        await query.edit_message_text(
-            f"از حمایت شما سپاسگزاریم! 💝\n\n"
-            f"برای حمایت از توسعه بازی می‌توانید به آدرس زیر ارز دیجیتال ارسال کنید:\n\n"
-            f"TRX: {TRX_ADDRESS}\n\n"
-            "هر مقدار کمک شما باعث انگیزه بیشتر ما می‌شود!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
-        )
-        
+        await show_donate(query)
     elif data == "main_menu":
-        user_data["state"] = STATE_MAIN_MENU
-        await query.edit_message_text(
-            f"به منوی اصلی بازگشتید، کاپیتان {user_data['name']}! 🏴‍☠️",
-            reply_markup=main_menu_keyboard(),
-        )
-        
+        await return_to_main_menu(query, user_data)
     elif data.startswith("buy_"):
-        item_name = data[4:]
-        await buy_item(query, user_data, item_name)
-        
+        await buy_item(query, user_data, data[4:])
     elif data.startswith("use_"):
-        item_name = data[4:]
-        await use_item(query, user_data, item_name)
-        
+        await use_item(query, user_data, data[4:])
     elif data.startswith("upgrade_"):
-        ship_name = data[8:]
-        await upgrade_ship(query, user_data, ship_name)
+        await upgrade_ship(query, user_data, data[8:])
 
-async def show_shop(query, user_data):
-    keyboard = []
-    
-    for item_name, item_data in SHOP_ITEMS.items():
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{item_name} - {item_data['price']} سکه ({item_data['effect']})",
-                callback_data=f"buy_{item_name}",
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
-    
-    await query.edit_message_text(
-        "🏪 فروشگاه دزدان دریایی 🏪\n\n"
-        "در اینجا می‌توانید وسایل مختلفی برای کمک در سفرهای دریایی خود خریداری کنید:\n\n"
-        f"سکه‌های شما: {user_data['gold']}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-async def buy_item(query, user_data, item_name):
-    if item_name not in SHOP_ITEMS:
+# --- توابع پردازش ---
+async def handle_sailing(query, user_data):
+    if user_data["energy"] < 10:
         await query.edit_message_text(
-            "این آیتم در فروشگاه موجود نیست!",
+            "انرژی شما برای دریانوردی کافی نیست! استراحت کنید یا از جعبه کمک‌های اولیه استفاده کنید.",
             reply_markup=main_menu_keyboard(),
         )
         return
     
-    item = SHOP_ITEMS[item_name]
-    
-    if user_data["gold"] < item["price"]:
-        await query.edit_message_text(
-            "سکه کافی برای خرید این آیتم ندارید!",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    
-    user_data["gold"] -= item["price"]
-    user_data["inventory"].append(item_name)
+    user_data["energy"] -= 10
+    duration = random.randint(5, 15)
+    user_data["sailing_end"] = datetime.now() + timedelta(seconds=duration)
+    user_data["state"] = STATE_SAILING
+    save_user_data()
     
     await query.edit_message_text(
-        f"شما با موفقیت {item_name} را خریداری کردید! 🎉\n\n"
-        f"سکه‌های باقی‌مانده: {user_data['gold']}",
-        reply_markup=main_menu_keyboard(),
+        f"کشتی شما به دریا زده است! ⛵\n\n"
+        f"سفر دریایی حدود {duration} ثانیه طول خواهد کشید...",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
     )
-    user_data["state"] = STATE_MAIN_MENU
-
-async def show_inventory(query, user_data):
-    if not user_data["inventory"]:
-        await query.edit_message_text(
-            "موجودی شما خالی است! به فروشگاه سر بزنید.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
-        )
-        return
-    
-    keyboard = []
-    
-    for item in user_data["inventory"]:
-        keyboard.append([InlineKeyboardButton(f"استفاده از {item}", callback_data=f"use_{item}")])
-    
-    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
-    
-    await query.edit_message_text(
-        "🎒 موجودی شما 🎒\n\n"
-        f"سکه‌های شما: {user_data['gold']}\n"
-        f"انرژی: {user_data['energy']}/100\n"
-        f"کشتی فعلی: {user_data['ship']}\n\n"
-        "آیتم‌های شما:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-async def use_item(query, user_data, item_name):
-    if item_name not in user_data["inventory"]:
-        await query.edit_message_text(
-            "این آیتم در موجودی شما وجود ندارد!",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    
-    user_data["inventory"].remove(item_name)
-    
-    if item_name == "جعبه کمک‌های اولیه":
-        user_data["energy"] = min(100, user_data["energy"] + 50)
-        effect = "50 انرژی بازیابی شد!"
-    elif item_name == "توپ جنگی":
-        effect = "در نبرد بعدی حمله شما افزایش می‌یابد!"
-    elif item_name == "زره مستحکم":
-        effect = "در نبرد بعدی دفاع شما افزایش می‌یابد!"
-    else:
-        effect = "آیتم استفاده شد!"
-    
-    await query.edit_message_text(
-        f"شما از {item_name} استفاده کردید! {effect}",
-        reply_markup=main_menu_keyboard(),
-    )
-    user_data["state"] = STATE_MAIN_MENU
-
-async def show_upgrade(query, user_data):
-    current_ship = user_data["ship"]
-    ship_names = list(SHIP_TYPES.keys())
-    current_index = ship_names.index(current_ship)
-    
-    keyboard = []
-    
-    for i, (ship_name, ship_data) in enumerate(SHIP_TYPES.items()):
-        if i <= current_index:
-            status = "✅ (دارید)"
-        elif i == current_index + 1:
-            status = f"🔼 ({ship_data['price']} سکه)"
-        else:
-            status = "🔒 (قفل شده)"
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{ship_name}: سرعت {ship_data['speed']} - حمله {ship_data['attack']} - دفاع {ship_data['defense']} - ظرفیت {ship_data['capacity']} {status}",
-                callback_data=f"upgrade_{ship_name}" if i == current_index + 1 else "none",
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
-    
-    await query.edit_message_text(
-        "⚓ ارتقاء کشتی ⚓\n\n"
-        "کشتی بهتر به معنای سفرهای دریایی سودآورتر است!\n\n"
-        f"سکه‌های شما: {user_data['gold']}\n"
-        f"کشتی فعلی: {current_ship}",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-async def upgrade_ship(query, user_data, ship_name):
-    if ship_name not in SHIP_TYPES:
-        await query.edit_message_text(
-            "این کشتی وجود ندارد!",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    
-    ship_data = SHIP_TYPES[ship_name]
-    
-    if user_data["gold"] < ship_data["price"]:
-        await query.edit_message_text(
-            "سکه کافی برای ارتقاء کشتی ندارید!",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    
-    user_data["gold"] -= ship_data["price"]
-    user_data["ship"] = ship_name
-    
-    await query.edit_message_text(
-        f"تبریک! کشتی شما به {ship_name} ارتقا یافت! 🎉⚓\n\n"
-        f"مشخصات جدید:\n"
-        f"سرعت: {ship_data['speed']}\n"
-        f"حمله: {ship_data['attack']}\n"
-        f"دفاع: {ship_data['defense']}\n"
-        f"ظرفیت: {ship_data['capacity']}\n\n"
-        f"سکه‌های باقی‌مانده: {user_data['gold']}",
-        reply_markup=main_menu_keyboard(),
-    )
-    user_data["state"] = STATE_MAIN_MENU
 
 async def check_sailing(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
+    completed_users = []
     
     for user_id, user_data in users_db.items():
-        if user_data["state"] == STATE_SAILING and user_data["sailing_end"] <= now:
-            await complete_sailing(context, user_id)
+        if user_data["state"] == STATE_SAILING and user_data["sailing_end"] and user_data["sailing_end"] <= now:
+            completed_users.append(user_id)
+    
+    for user_id in completed_users:
+        await complete_sailing(context, user_id)
 
-async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id):
+async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id: str):
     user_data = users_db[user_id]
     ship_stats = SHIP_TYPES[user_data["ship"]]
     
@@ -351,7 +207,6 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id):
     )[0]
     
     if event["reward"] == "battle":
-        # نبرد با دزدان دریایی
         enemy_power = random.randint(5, 15)
         user_power = ship_stats["attack"] + random.randint(1, 5)
         
@@ -370,7 +225,6 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id):
         
         message = f"{event['message']}\n\n{result}"
     else:
-        # رویداد عادی
         reward = random.randint(event["reward"][0], event["reward"][1])
         
         if "قلاب طلایی" in user_data["inventory"] and "گنج" in event["name"]:
@@ -383,6 +237,8 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id):
         message = f"{event['message']}\n\nمقدار سکه به دست آمده: {reward} 🪙"
     
     user_data["state"] = STATE_MAIN_MENU
+    user_data["sailing_end"] = None
+    save_user_data()
     
     try:
         await context.bot.send_message(
@@ -395,96 +251,58 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id):
     except Exception as e:
         logger.error(f"Error sending message to {user_id}: {e}")
 
-def main_menu_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("دریانوردی ⛵", callback_data="sail")],
-        [InlineKeyboardButton("فروشگاه 🏪", callback_data="shop")],
-        [InlineKeyboardButton("موجودی 💰", callback_data="inventory")],
-        [InlineKeyboardButton("ارتقاء کشتی ⚓", callback_data="upgrade")],
-        [InlineKeyboardButton("حمایت از ما 💝", callback_data="donate")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("شما دسترسی به این فرمان را ندارید!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text(
-            "فرمان‌های ادمین:\n"
-            "/admin stats - آمار کاربران\n"
-            "/admin notify <پیام> - ارسال پیام به همه کاربران\n"
-            "/admin gold <user_id> <amount> - اضافه کردن سکه به کاربر"
-        )
-        return
-    
-    command = context.args[0]
-    
-    if command == "stats":
-        await update.message.reply_text(
-            f"آمار کاربران:\n"
-            f"تعداد کاربران: {len(users_db)}\n"
-            f"سکه کل: {sum(user['gold'] for user in users_db.values())}"
-        )
-    elif command == "notify":
-        message = " ".join(context.args[1:])
-        success = 0
-        failed = 0
-        
-        for user_id in users_db:
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"📢 اطلاعیه ادمین:\n\n{message}",
-                )
-                success += 1
-            except Exception as e:
-                logger.error(f"Error notifying {user_id}: {e}")
-                failed += 1
-        
-        await update.message.reply_text(
-            f"پیام به {success} کاربر ارسال شد. {failed} ارسال ناموفق بود."
-        )
-    elif command == "gold":
-        if len(context.args) < 3:
-            await update.message.reply_text("استفاده: /admin gold <user_id> <amount>")
-            return
-        
-        try:
-            target_id = int(context.args[1])
-            amount = int(context.args[2])
-            
-            if target_id not in users_db:
-                await update.message.reply_text("کاربر یافت نشد!")
-                return
-            
-            users_db[target_id]["gold"] += amount
-            await update.message.reply_text(
-                f"{amount} سکه به کاربر {target_id} اضافه شد. موجودی جدید: {users_db[target_id]['gold']}"
-            )
-        except ValueError:
-            await update.message.reply_text("شناسه کاربر و مقدار باید عددی باشند!")
+# --- توابع دیگر (مانند show_shop, buy_item, upgrade_ship و ...) ---
+# [کدهای قبلی را اینجا قرار دهید، با تغییرات زیر:
+# 1. تبدیل تمام user_idها به رشته (str)
+# 2. اضافه کردن save_user_data() پس از هر تغییر در داده کاربر
+# 3. اضافه کردن مدیریت خطاها]
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+def setup_job_queue(application):
+    """تنظیم JobQueue برای بررسی سفرهای دریایی"""
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(check_sailing, interval=5.0, first=5.0)
+    else:
+        logger.warning("JobQueue is not available. Sailing completion checks will not work.")
+
+async def post_init(application: Application):
+    """عملیات پس از راه‌اندازی"""
+    await application.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to {WEBHOOK_URL}")
 
 def main() -> None:
-    application = Application.builder().token(TOKEN).build()
+    # بارگذاری داده کاربران
+    global users_db
+    users_db = load_user_data()
     
+    # ایجاد برنامه تلگرام
+    application = ApplicationBuilder() \
+        .token(TOKEN) \
+        .post_init(post_init) \
+        .build()
+    
+    # ثبت هندلرها
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CallbackQueryHandler(button))
-    
+    application.add_handler(CallbackQueryHandler(button_handler))
     application.add_error_handler(error_handler)
     
-    # چک کردن سفرهای دریایی هر 5 ثانیه
-    job_queue = application.job_queue
-    job_queue.run_repeating(check_sailing, interval=5.0, first=5.0)
+    # تنظیم JobQueue
+    setup_job_queue(application)
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # راه‌اندازی وب‌هوک
+    if os.getenv('RENDER', 'false').lower() == 'true':
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+        )
+    else:
+        application.run_polling()
 
 if __name__ == "__main__":
     main()
