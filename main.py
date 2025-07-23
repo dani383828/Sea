@@ -12,8 +12,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    Updater,
-    JobQueue
 )
 
 # تنظیمات پایه
@@ -71,19 +69,16 @@ SEA_EVENTS = [
     {"name": "دزدان دریایی", "reward": "battle", "chance": 0.05, "message": "دزدان دریایی به شما حمله کردند!"},
 ]
 
-# --- توابع کمکی ---
 def main_menu_keyboard():
-    keyboard = [
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("دریانوردی ⛵", callback_data="sail")],
         [InlineKeyboardButton("فروشگاه 🏪", callback_data="shop")],
         [InlineKeyboardButton("موجودی 💰", callback_data="inventory")],
         [InlineKeyboardButton("ارتقاء کشتی ⚓", callback_data="upgrade")],
         [InlineKeyboardButton("حمایت از ما 💝", callback_data="donate")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 def save_user_data():
-    """ذخیره داده کاربران در فایل"""
     try:
         with open('user_data.json', 'w') as f:
             json.dump(users_db, f, indent=4, default=str)
@@ -91,11 +86,9 @@ def save_user_data():
         logger.error(f"Error saving user data: {e}")
 
 def load_user_data():
-    """بارگذاری داده کاربران از فایل"""
     try:
         with open('user_data.json', 'r') as f:
             data = json.load(f)
-            # تبدیل رشته‌های تاریخ به شیء datetime
             for user_id, user_data in data.items():
                 if 'sailing_end' in user_data and user_data['sailing_end']:
                     user_data['sailing_end'] = datetime.fromisoformat(user_data['sailing_end'])
@@ -106,7 +99,6 @@ def load_user_data():
         logger.error(f"Error loading user data: {e}")
         return {}
 
-# --- دستورات اصلی ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = str(user.id)
@@ -199,11 +191,7 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id: str):
     user_data = users_db[user_id]
     ship_stats = SHIP_TYPES[user_data["ship"]]
     
-    # انتخاب رویداد دریایی
-    event = random.choices(
-        SEA_EVENTS,
-        weights=[e["chance"] for e in SEA_EVENTS],
-    )[0]
+    event = random.choices(SEA_EVENTS, weights=[e["chance"] for e in SEA_EVENTS])[0]
     
     if event["reward"] == "battle":
         enemy_power = random.randint(5, 15)
@@ -250,7 +238,6 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id: str):
     except Exception as e:
         logger.error(f"Error sending message to {user_id}: {e}")
 
-# --- توابع دیگر ---
 async def show_shop(query, user_data):
     keyboard = []
     for item_name, item_data in SHOP_ITEMS.items():
@@ -284,7 +271,7 @@ async def buy_item(query, user_data, item_name):
     save_user_data()
     
     await query.edit_message_text(
-        f"شما با موفقیت {item_name} را خریداری کردید! �\n\nسکه‌های باقی‌مانده: {user_data['gold']}",
+        f"شما با موفقیت {item_name} را خریداری کردید! 🎉\n\nسکه‌های باقی‌مانده: {user_data['gold']}",
         reply_markup=main_menu_keyboard(),
     )
 
@@ -479,14 +466,17 @@ def main() -> None:
     
     # راه‌اندازی
     if os.getenv('RENDER', 'false').lower() == 'true':
+        # استفاده از webhook در محیط Render
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+            webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+            cert=None,
+            drop_pending_updates=True
         )
     else:
-        application.run_polling()
+        # استفاده از polling در محیط توسعه
+        application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
