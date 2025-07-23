@@ -634,6 +634,8 @@ def back_to_main(update, context):
 # مدیریت کلیدهای اینلاین
 def button_handler(update, context):
     query = update.callback_query
+
+
     data = query.data
 
     if data == "start_game":
