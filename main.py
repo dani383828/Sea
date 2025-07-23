@@ -700,6 +700,8 @@ async def main():
         url_path=TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
     )
+    # برای جلوگیری از توقف برنامه
+    await app.updater.wait_for_stop()
 
 if __name__ == "__main__":
     import asyncio
