@@ -12,9 +12,9 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    ApplicationBuilder
+    Updater,
+    JobQueue
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # تنظیمات پایه
 load_dotenv()
@@ -86,7 +86,7 @@ def save_user_data():
     """ذخیره داده کاربران در فایل"""
     try:
         with open('user_data.json', 'w') as f:
-            json.dump(users_db, f, indent=4)
+            json.dump(users_db, f, indent=4, default=str)
     except Exception as e:
         logger.error(f"Error saving user data: {e}")
 
@@ -164,7 +164,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif data.startswith("upgrade_"):
         await upgrade_ship(query, user_data, data[8:])
 
-# --- توابع پردازش ---
 async def handle_sailing(query, user_data):
     if user_data["energy"] < 10:
         await query.edit_message_text(
@@ -251,27 +250,213 @@ async def complete_sailing(context: ContextTypes.DEFAULT_TYPE, user_id: str):
     except Exception as e:
         logger.error(f"Error sending message to {user_id}: {e}")
 
-# --- توابع دیگر (مانند show_shop, buy_item, upgrade_ship و ...) ---
-# [کدهای قبلی را اینجا قرار دهید، با تغییرات زیر:
-# 1. تبدیل تمام user_idها به رشته (str)
-# 2. اضافه کردن save_user_data() پس از هر تغییر در داده کاربر
-# 3. اضافه کردن مدیریت خطاها]
+# --- توابع دیگر ---
+async def show_shop(query, user_data):
+    keyboard = []
+    for item_name, item_data in SHOP_ITEMS.items():
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{item_name} - {item_data['price']} سکه ({item_data['effect']})",
+                callback_data=f"buy_{item_name}",
+            )
+        ])
+    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
+    
+    await query.edit_message_text(
+        "🏪 فروشگاه دزدان دریایی 🏪\n\n"
+        "در اینجا می‌توانید وسایل مختلفی برای کمک در سفرهای دریایی خود خریداری کنید:\n\n"
+        f"سکه‌های شما: {user_data['gold']}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+async def buy_item(query, user_data, item_name):
+    if item_name not in SHOP_ITEMS:
+        await query.edit_message_text("این آیتم در فروشگاه موجود نیست!", reply_markup=main_menu_keyboard())
+        return
+    
+    item = SHOP_ITEMS[item_name]
+    if user_data["gold"] < item["price"]:
+        await query.edit_message_text("سکه کافی برای خرید این آیتم ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    user_data["gold"] -= item["price"]
+    user_data["inventory"].append(item_name)
+    save_user_data()
+    
+    await query.edit_message_text(
+        f"شما با موفقیت {item_name} را خریداری کردید! �\n\nسکه‌های باقی‌مانده: {user_data['gold']}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+async def show_inventory(query, user_data):
+    if not user_data["inventory"]:
+        await query.edit_message_text(
+            "موجودی شما خالی است! به فروشگاه سر بزنید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
+        )
+        return
+    
+    keyboard = []
+    for item in user_data["inventory"]:
+        keyboard.append([InlineKeyboardButton(f"استفاده از {item}", callback_data=f"use_{item}")])
+    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
+    
+    await query.edit_message_text(
+        "🎒 موجودی شما 🎒\n\n"
+        f"سکه‌های شما: {user_data['gold']}\n"
+        f"انرژی: {user_data['energy']}/100\n"
+        f"کشتی فعلی: {user_data['ship']}\n\n"
+        "آیتم‌های شما:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+async def use_item(query, user_data, item_name):
+    if item_name not in user_data["inventory"]:
+        await query.edit_message_text("این آیتم در موجودی شما وجود ندارد!", reply_markup=main_menu_keyboard())
+        return
+    
+    user_data["inventory"].remove(item_name)
+    effect = "آیتم استفاده شد!"
+    
+    if item_name == "جعبه کمک‌های اولیه":
+        user_data["energy"] = min(100, user_data["energy"] + 50)
+        effect = "50 انرژی بازیابی شد!"
+    elif item_name == "توپ جنگی":
+        effect = "در نبرد بعدی حمله شما افزایش می‌یابد!"
+    elif item_name == "زره مستحکم":
+        effect = "در نبرد بعدی دفاع شما افزایش می‌یابد!"
+    
+    save_user_data()
+    await query.edit_message_text(
+        f"شما از {item_name} استفاده کردید! {effect}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+async def show_upgrade(query, user_data):
+    current_ship = user_data["ship"]
+    ship_names = list(SHIP_TYPES.keys())
+    current_index = ship_names.index(current_ship)
+    
+    keyboard = []
+    for i, (ship_name, ship_data) in enumerate(SHIP_TYPES.items()):
+        if i <= current_index:
+            status = "✅ (دارید)"
+        elif i == current_index + 1:
+            status = f"🔼 ({ship_data['price']} سکه)"
+        else:
+            status = "🔒 (قفل شده)"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{ship_name}: سرعت {ship_data['speed']} - حمله {ship_data['attack']} - دفاع {ship_data['defense']} - ظرفیت {ship_data['capacity']} {status}",
+                callback_data=f"upgrade_{ship_name}" if i == current_index + 1 else "none",
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")])
+    
+    await query.edit_message_text(
+        "⚓ ارتقاء کشتی ⚓\n\n"
+        "کشتی بهتر به معنای سفرهای دریایی سودآورتر است!\n\n"
+        f"سکه‌های شما: {user_data['gold']}\n"
+        f"کشتی فعلی: {current_ship}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+async def upgrade_ship(query, user_data, ship_name):
+    if ship_name not in SHIP_TYPES:
+        await query.edit_message_text("این کشتی وجود ندارد!", reply_markup=main_menu_keyboard())
+        return
+    
+    ship_data = SHIP_TYPES[ship_name]
+    if user_data["gold"] < ship_data["price"]:
+        await query.edit_message_text("سکه کافی برای ارتقاء کشتی ندارید!", reply_markup=main_menu_keyboard())
+        return
+    
+    user_data["gold"] -= ship_data["price"]
+    user_data["ship"] = ship_name
+    save_user_data()
+    
+    await query.edit_message_text(
+        f"تبریک! کشتی شما به {ship_name} ارتقا یافت! 🎉⚓\n\n"
+        f"مشخصات جدید:\n"
+        f"سرعت: {ship_data['speed']}\n"
+        f"حمله: {ship_data['attack']}\n"
+        f"دفاع: {ship_data['defense']}\n"
+        f"ظرفیت: {ship_data['capacity']}\n\n"
+        f"سکه‌های باقی‌مانده: {user_data['gold']}",
+        reply_markup=main_menu_keyboard(),
+    )
+
+async def show_donate(query):
+    await query.edit_message_text(
+        f"از حمایت شما سپاسگزاریم! 💝\n\n"
+        f"برای حمایت از توسعه بازی می‌توانید به آدرس زیر ارز دیجیتال ارسال کنید:\n\n"
+        f"TRX: {TRX_ADDRESS}\n\n"
+        "هر مقدار کمک شما باعث انگیزه بیشتر ما می‌شود!",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("برگشت ↩️", callback_data="main_menu")]]),
+    )
+
+async def return_to_main_menu(query, user_data):
+    user_data["state"] = STATE_MAIN_MENU
+    save_user_data()
+    await query.edit_message_text(
+        f"به منوی اصلی بازگشتید، کاپیتان {user_data['name']}! 🏴‍☠️",
+        reply_markup=main_menu_keyboard(),
+    )
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("شما دسترسی به این فرمان را ندارید!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "فرمان‌های ادمین:\n"
+            "/admin stats - آمار کاربران\n"
+            "/admin notify <پیام> - ارسال پیام به همه کاربران\n"
+            "/admin gold <user_id> <amount> - اضافه کردن سکه به کاربر"
+        )
+        return
+    
+    command = context.args[0]
+    if command == "stats":
+        await update.message.reply_text(
+            f"آمار کاربران:\nتعداد کاربران: {len(users_db)}\nسکه کل: {sum(user['gold'] for user in users_db.values())}"
+        )
+    elif command == "notify":
+        message = " ".join(context.args[1:])
+        success = 0
+        failed = 0
+        for user_id in users_db:
+            try:
+                await context.bot.send_message(chat_id=user_id, text=f"📢 اطلاعیه ادمین:\n\n{message}")
+                success += 1
+            except Exception as e:
+                logger.error(f"Error notifying {user_id}: {e}")
+                failed += 1
+        await update.message.reply_text(f"پیام به {success} کاربر ارسال شد. {failed} ارسال ناموفق بود.")
+    elif command == "gold":
+        if len(context.args) < 3:
+            await update.message.reply_text("استفاده: /admin gold <user_id> <amount>")
+            return
+        try:
+            target_id = str(context.args[1])
+            amount = int(context.args[2])
+            if target_id not in users_db:
+                await update.message.reply_text("کاربر یافت نشد!")
+                return
+            users_db[target_id]["gold"] += amount
+            save_user_data()
+            await update.message.reply_text(
+                f"{amount} سکه به کاربر {target_id} اضافه شد. موجودی جدید: {users_db[target_id]['gold']}"
+            )
+        except ValueError:
+            await update.message.reply_text("شناسه کاربر و مقدار باید عددی باشند!")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Exception while handling an update:", exc_info=context.error)
-
-def setup_job_queue(application):
-    """تنظیم JobQueue برای بررسی سفرهای دریایی"""
-    job_queue = application.job_queue
-    if job_queue:
-        job_queue.run_repeating(check_sailing, interval=5.0, first=5.0)
-    else:
-        logger.warning("JobQueue is not available. Sailing completion checks will not work.")
-
-async def post_init(application: Application):
-    """عملیات پس از راه‌اندازی"""
-    await application.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook set to {WEBHOOK_URL}")
 
 def main() -> None:
     # بارگذاری داده کاربران
@@ -279,10 +464,7 @@ def main() -> None:
     users_db = load_user_data()
     
     # ایجاد برنامه تلگرام
-    application = ApplicationBuilder() \
-        .token(TOKEN) \
-        .post_init(post_init) \
-        .build()
+    application = Application.builder().token(TOKEN).build()
     
     # ثبت هندلرها
     application.add_handler(CommandHandler("start", start))
@@ -291,9 +473,11 @@ def main() -> None:
     application.add_error_handler(error_handler)
     
     # تنظیم JobQueue
-    setup_job_queue(application)
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(check_sailing, interval=5.0, first=5.0)
     
-    # راه‌اندازی وب‌هوک
+    # راه‌اندازی
     if os.getenv('RENDER', 'false').lower() == 'true':
         application.run_webhook(
             listen="0.0.0.0",
