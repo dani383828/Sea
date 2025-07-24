@@ -10,6 +10,7 @@ from telegram.ext import (
 import asyncio
 import os
 
+
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
 ADMIN_ID = 5542927340
 WEBHOOK_URL = "https://sea-2ri6.onrender.com"
@@ -17,6 +18,7 @@ WEBHOOK_URL = "https://sea-2ri6.onrender.com"
 app = FastAPI()
 bot = Bot(token=TOKEN)
 application = Application.builder().token(TOKEN).build()
+dp = application
 
 DB_PATH = "pirate_game.db"
 
