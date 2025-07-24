@@ -15,6 +15,7 @@ import time
 import asyncio
 import re
 from datetime import datetime, timedelta
+import os
 
 # توکن بات و اطلاعات مورد نیاز
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
@@ -26,7 +27,7 @@ app = Flask(__name__)
 
 # دیتابیس برای ذخیره اطلاعات کاربران
 def init_db():
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")  # مسیر دیسک پایدار
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -47,10 +48,15 @@ def init_db():
 
 init_db()
 
-# تنظیمات Flask برای Webhook
+# مسیر اصلی Flask
 @app.route('/')
 def home():
     return "Pirate Bot is running!"
+
+# مسیر Webhook
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    return "Webhook is active"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("شروع بازی ⚔️", callback_data='start_game')]]
@@ -73,7 +79,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == 'main_menu':
         await show_main_menu(query, context)
 
-    elif data.startswith('navigate'):
+    elif data == 'navigate':
         await start_navigation(query, context)
 
     elif data == 'strategy':
@@ -126,7 +132,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get('awaiting_ship_name'):
         if re.match("^[a-zA-Z0-9 ]+$", text) and text not in ['start', 'menu']:
-            conn = sqlite3.connect("pirates.db")
+            conn = sqlite3.connect("/var/data/pirates.db")
             c = conn.cursor()
             c.execute("SELECT ship_name FROM users WHERE ship_name = ?", (text,))
             if c.fetchone():
@@ -168,7 +174,7 @@ async def show_main_menu(update, context):
 
 async def start_navigation(query, context):
     user_id = query.from_user.id
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT ship_name, strategy, cannonballs, energy FROM users WHERE user_id = ?", (user_id,))
     user = c.fetchone()
@@ -256,7 +262,7 @@ async def fire_cannon(query, context):
     report = context.user_data['battle_reports'][-1]
     logical_timing = "خیلی بهشون نزدیک شدیم!" in report
     hit_chance = 0.65 if logical_timing else 0.1
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("UPDATE users SET cannonballs = cannonballs - 1 WHERE user_id = ?", (query.from_user.id,))
     conn.commit()
@@ -269,7 +275,7 @@ async def fire_cannon(query, context):
         await query.message.reply_text("💨 توپ خطا رفت!")
 
 async def handle_win(query, context, user_id, is_fake):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     gems_add = 1 if random.random() < 0.25 else 0
     c.execute(
@@ -285,7 +291,7 @@ async def handle_win(query, context, user_id, is_fake):
     )
 
 async def handle_loss(query, context, user_id, is_fake):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT gold, silver, gems FROM users WHERE user_id = ?", (user_id,))
     gold, silver, gems = c.fetchone()
@@ -318,7 +324,7 @@ async def show_strategy_menu(query, context):
     await query.message.edit_text("🎯 استراتژی حمله رو انتخاب کن:", reply_markup=reply_markup)
 
 async def set_strategy(query, context, strategy):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("UPDATE users SET strategy = ? WHERE user_id = ?", (strategy, query.from_user.id))
     conn.commit()
@@ -327,7 +333,7 @@ async def set_strategy(query, context, strategy):
                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def check_cannonballs(query, context):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT cannonballs FROM users WHERE user_id = ?", (query.from_user.id,))
     cannonballs = c.fetchone()[0]
@@ -387,7 +393,7 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
         pending = context.user_data.get('pending_gems')
         if pending:
             user_id, gems = pending['user_id'], pending['gems']
-            conn = sqlite3.connect("pirates.db")
+            conn = sqlite3.connect("/var/data/pirates.db")
             c = conn.cursor()
             c.execute("UPDATE users SET gems = gems + ? WHERE user_id = ?", (gems, user_id))
             conn.commit()
@@ -402,7 +408,7 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data['pending_gems'] = None
 
 async def buy_cannonball(query, context):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT gems FROM users WHERE user_id = ?", (query.from_user.id,))
     gems = c.fetchone()[0]
@@ -426,7 +432,7 @@ async def convert_gems(query, context, option=None):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.edit_text("تبدیل جم به سکه و نقره:", reply_markup=reply_markup)
     else:
-        conn = sqlite3.connect("pirates.db")
+        conn = sqlite3.connect("/var/data/pirates.db")
         c = conn.cursor()
         c.execute("SELECT gems FROM users WHERE user_id = ?", (query.from_user.id,))
         gems = c.fetchone()[0]
@@ -447,7 +453,7 @@ async def convert_gems(query, context, option=None):
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def show_leaderboard(query, context):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT ship_name, score, wins, total_games FROM users ORDER BY score DESC LIMIT 10")
     leaders = c.fetchall()
@@ -460,7 +466,7 @@ async def show_leaderboard(query, context):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def search_and_challenge(update, context, ship_name):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT user_id FROM users WHERE ship_name = ?", (ship_name,))
     result = c.fetchone()
@@ -476,7 +482,7 @@ async def search_and_challenge(update, context, ship_name):
                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_ship_info(query, context):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT ship_name, gems, gold, silver, wins, total_games, energy FROM users WHERE user_id = ?", (query.from_user.id,))
     user = c.fetchone()
@@ -497,7 +503,7 @@ async def show_ship_info(query, context):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def show_energy_menu(query, context):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT energy, last_purchase_time FROM users WHERE user_id = ?", (query.from_user.id,))
     energy, last_purchase_time = c.fetchone()
@@ -525,7 +531,7 @@ async def show_energy_menu(query, context):
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def buy_food(query, context, food):
-    conn = sqlite3.connect("pirates.db")
+    conn = sqlite3.connect("/var/data/pirates.db")
     c = conn.cursor()
     c.execute("SELECT gold, silver, last_purchase_time FROM users WHERE user_id = ?", (query.from_user.id,))
     gold, silver, last_purchase_time = c.fetchone()
@@ -569,12 +575,13 @@ async def main():
     await application.start()
     await application.updater.start_webhook(
         listen="0.0.0.0",
-        port=8443,
+        port=int(os.environ.get('PORT', 10000)),
         url_path=TOKEN,
         webhook_url=f"https://sea-2ri6.onrender.com/{TOKEN}"
     )
 
 if __name__ == '__main__':
     import threading
-    threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': 8443}).start()
+    port = int(os.environ.get('PORT', 10000))
+    threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': port}).start()
     asyncio.run(main())
