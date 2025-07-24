@@ -75,7 +75,7 @@ def home():
     return "Pirate Bot is running!"
 
 # مسیر Webhook
-@app.route(f'/{TOKEN}', methods=['POST'])
+@app.route(f'/webhook/{TOKEN}', methods=['POST'])
 async def webhook():
     try:
         update = telegram.Update.de_json(request.get_json(force=True), application.bot)
@@ -612,8 +612,8 @@ async def main():
         await application.updater.start_webhook(
             listen="0.0.0.0",
             port=int(os.environ.get('PORT', 10000)),
-            url_path=TOKEN,
-            webhook_url=f"https://sea-2ri6.onrender.com/{TOKEN}"
+            url_path=f"webhook/{TOKEN}",
+            webhook_url=f"https://sea-2ri6.onrender.com/webhook/{TOKEN}"
         )
         logger.info("Webhook started")
     except Exception as e:
