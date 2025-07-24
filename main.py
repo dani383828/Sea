@@ -8,7 +8,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from flask import Flask
+from flask import Flask, request
 import sqlite3
 import random
 import time
@@ -31,7 +31,7 @@ TRX_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 app = Flask(__name__)
 
 # مسیر دیتابیس
-DATABASE_PATH = os.environ.get('DATABASE_PATH', '/var/data/pirates.db')
+DATABASE_PATH = os.environ.get('DATABASE_PATH', '/tmp/pirates.db')  # در صورت عدم تنظیم دیسک پایدار، از /tmp استفاده می‌شود
 
 # دیتابیس برای ذخیره اطلاعات کاربران
 def init_db():
@@ -71,8 +71,8 @@ def home():
 # مسیر Webhook
 @app.route(f'/{TOKEN}', methods=['POST'])
 async def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), app.bot)
-    await app.process_update(update)
+    update = telegram.Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
     return "OK"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -578,6 +578,7 @@ async def buy_food(query, context, food):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def main():
+    global application
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
