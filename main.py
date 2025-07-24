@@ -418,6 +418,7 @@ def fire_cannon(update, context):
         query.edit_message_text(
             "🎯 توپ به هدف خورد! شانس برنده شدنت بیشتر شد!",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("پرتاب توپ ☄️", callback_data="fire_cannon")]])
+        )
     else:
         query.edit_message_text(
             "💨 توپ خطا رفت!",
