@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 # تنظیمات اولیه
-BOT_TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
+TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
 ADMIN_ID = 5542927340
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
