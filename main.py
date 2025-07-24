@@ -31,14 +31,14 @@ TRX_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 app = Flask(__name__)
 
 # مسیر دیتابیس
-DATABASE_PATH = os.environ.get('DATABASE_PATH', '/tmp/pirates.db')  # در صورت عدم تنظیم دیسک پایدار، از /tmp استفاده می‌شود
+DATABASE_PATH = os.environ.get('DATABASE_PATH', '/opt/render/data/pirates.db')
 
 # دیتابیس برای ذخیره اطلاعات کاربران
 def init_db():
     try:
         # اطمینان از وجود دایرکتوری
         os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -61,21 +61,37 @@ def init_db():
         logger.error(f"Failed to initialize database: {e}")
         raise
 
-init_db()
+# مقداردهی دیتابیس
+try:
+    init_db()
+except Exception as e:
+    logger.error(f"Startup failed due to database error: {e}")
+    raise
 
 # مسیر اصلی Flask
 @app.route('/')
 def home():
+    logger.info("Received request for /")
     return "Pirate Bot is running!"
 
 # مسیر Webhook
 @app.route(f'/{TOKEN}', methods=['POST'])
 async def webhook():
-    update = telegram.Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
-    return "OK"
+    try:
+        update = telegram.Update.de_json(request.get_json(force=True), application.bot)
+        if update:
+            logger.info(f"Received update: {update.update_id}")
+            await application.process_update(update)
+            return "OK", 200
+        else:
+            logger.error("Invalid update received")
+            return "Invalid update", 400
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return "Webhook error", 500
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Start command received from user {update.effective_user.id}")
     keyboard = [[InlineKeyboardButton("شروع بازی ⚔️", callback_data='start_game')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -88,6 +104,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_id = query.from_user.id
     data = query.data
+    logger.info(f"Button callback received: {data} from user {user_id}")
 
     if data == 'start_game':
         await query.message.reply_text("کشتیت در حال ساخته شدنه...\nساخته شد! 🚢\nنام کشتیت رو بگو (فقط انگلیسی، بدون تکرار):")
@@ -142,10 +159,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
+    logger.info(f"Message received from user {user_id}: {text}")
 
     if context.user_data.get('awaiting_ship_name'):
         if re.match("^[a-zA-Z0-9 ]+$", text) and text not in ['start', 'menu']:
-            conn = sqlite3.connect(DATABASE_PATH)
+            conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
             c = conn.cursor()
             c.execute("SELECT ship_name FROM users WHERE ship_name = ?", (text,))
             if c.fetchone():
@@ -187,7 +205,7 @@ async def show_main_menu(update, context):
 
 async def start_navigation(query, context):
     user_id = query.from_user.id
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT ship_name, strategy, cannonballs, energy FROM users WHERE user_id = ?", (user_id,))
     user = c.fetchone()
@@ -275,7 +293,7 @@ async def fire_cannon(query, context):
     report = context.user_data['battle_reports'][-1]
     logical_timing = "خیلی بهشون نزدیک شدیم!" in report
     hit_chance = 0.65 if logical_timing else 0.1
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE users SET cannonballs = cannonballs - 1 WHERE user_id = ?", (query.from_user.id,))
     conn.commit()
@@ -288,7 +306,7 @@ async def fire_cannon(query, context):
         await query.message.reply_text("💨 توپ خطا رفت!")
 
 async def handle_win(query, context, user_id, is_fake):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     gems_add = 1 if random.random() < 0.25 else 0
     c.execute(
@@ -304,7 +322,7 @@ async def handle_win(query, context, user_id, is_fake):
     )
 
 async def handle_loss(query, context, user_id, is_fake):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT gold, silver, gems FROM users WHERE user_id = ?", (user_id,))
     gold, silver, gems = c.fetchone()
@@ -337,7 +355,7 @@ async def show_strategy_menu(query, context):
     await query.message.edit_text("🎯 استراتژی حمله رو انتخاب کن:", reply_markup=reply_markup)
 
 async def set_strategy(query, context, strategy):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE users SET strategy = ? WHERE user_id = ?", (strategy, query.from_user.id))
     conn.commit()
@@ -346,7 +364,7 @@ async def set_strategy(query, context, strategy):
                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def check_cannonballs(query, context):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT cannonballs FROM users WHERE user_id = ?", (query.from_user.id,))
     cannonballs = c.fetchone()[0]
@@ -402,11 +420,12 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if update.message.from_user.id != ADMIN_ID:
         return
     text = update.message.text
+    logger.info(f"Admin command received: {text}")
     if text == "/confirm":
         pending = context.user_data.get('pending_gems')
         if pending:
             user_id, gems = pending['user_id'], pending['gems']
-            conn = sqlite3.connect(DATABASE_PATH)
+            conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
             c = conn.cursor()
             c.execute("UPDATE users SET gems = gems + ? WHERE user_id = ?", (gems, user_id))
             conn.commit()
@@ -421,7 +440,7 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
             context.user_data['pending_gems'] = None
 
 async def buy_cannonball(query, context):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT gems FROM users WHERE user_id = ?", (query.from_user.id,))
     gems = c.fetchone()[0]
@@ -445,7 +464,7 @@ async def convert_gems(query, context, option=None):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.edit_text("تبدیل جم به سکه و نقره:", reply_markup=reply_markup)
     else:
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
         c = conn.cursor()
         c.execute("SELECT gems FROM users WHERE user_id = ?", (query.from_user.id,))
         gems = c.fetchone()[0]
@@ -466,7 +485,7 @@ async def convert_gems(query, context, option=None):
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def show_leaderboard(query, context):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT ship_name, score, wins, total_games FROM users ORDER BY score DESC LIMIT 10")
     leaders = c.fetchall()
@@ -479,7 +498,7 @@ async def show_leaderboard(query, context):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def search_and_challenge(update, context, ship_name):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT user_id FROM users WHERE ship_name = ?", (ship_name,))
     result = c.fetchone()
@@ -495,7 +514,7 @@ async def search_and_challenge(update, context, ship_name):
                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_ship_info(query, context):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT ship_name, gems, gold, silver, wins, total_games, energy FROM users WHERE user_id = ?", (query.from_user.id,))
     user = c.fetchone()
@@ -516,7 +535,7 @@ async def show_ship_info(query, context):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]]))
 
 async def show_energy_menu(query, context):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT energy, last_purchase_time FROM users WHERE user_id = ?", (query.from_user.id,))
     energy, last_purchase_time = c.fetchone()
@@ -544,7 +563,7 @@ async def show_energy_menu(query, context):
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def buy_food(query, context, food):
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT gold, silver, last_purchase_time FROM users WHERE user_id = ?", (query.from_user.id,))
     gold, silver, last_purchase_time = c.fetchone()
@@ -579,20 +598,27 @@ async def buy_food(query, context, food):
 
 async def main():
     global application
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CommandHandler("confirm", handle_admin_command))
-    application.add_handler(CommandHandler("reject", handle_admin_command))
-    await application.initialize()
-    await application.start()
-    await application.updater.start_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get('PORT', 10000)),
-        url_path=TOKEN,
-        webhook_url=f"https://sea-2ri6.onrender.com/{TOKEN}"
-    )
+    try:
+        application = Application.builder().token(TOKEN).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(button_callback))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(CommandHandler("confirm", handle_admin_command))
+        application.add_handler(CommandHandler("reject", handle_admin_command))
+        await application.initialize()
+        logger.info("Application initialized")
+        await application.start()
+        logger.info("Application started")
+        await application.updater.start_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get('PORT', 10000)),
+            url_path=TOKEN,
+            webhook_url=f"https://sea-2ri6.onrender.com/{TOKEN}"
+        )
+        logger.info("Webhook started")
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+        raise
 
 if __name__ == '__main__':
     import threading
