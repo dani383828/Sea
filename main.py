@@ -1,21 +1,20 @@
 import os
 import logging
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes,
-    MessageHandler, filters, CallbackQueryHandler
+    Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 )
-import random
-from datetime import datetime, timedelta
-import pytz
 
-# Configurations
+# Configuration
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
-ADMIN_ID = 5542927340
-TRX_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
+ADMIN_ID = 5542927340
+TRX_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 
 # Logging
 logging.basicConfig(
@@ -24,730 +23,552 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Database simulation
-users_db = {}
-ships_db = {}
-battle_requests = {}
-fake_players = [
-    {"name": "Blackbeard", "strategy": "camouflage"},
-    {"name": "Red Anne", "strategy": "night_attack"},
-    {"name": "Calico Jack", "strategy": "fire_ship"},
-    {"name": "Captain Kidd", "strategy": "hook"},
-    {"name": "Barbarossa", "strategy": "ambush"},
-    {"name": "Davy Jones", "strategy": "fake_treasure"},
-    {"name": "Long John", "strategy": "spy"}
-]
-
 # FastAPI app
 app = FastAPI()
 
-# Telegram bot
+# Telegram bot application
 application = Application.builder().token(TOKEN).build()
 
-# Helper functions
-def get_user_data(user_id):
-    if user_id not in users_db:
-        users_db[user_id] = {
-            "gems": 5,
-            "gold": 10,
-            "silver": 15,
-            "points": 0,
-            "wins": 0,
-            "losses": 0,
-            "last_energy_refill": None,
-            "cannon_balls": 3
-        }
-    return users_db[user_id]
+# In-memory storage (replace with database in production)
+users: Dict[int, Dict] = {}  # {user_id: {ship_name, gems, gold, silver, energy, wins, total_games, cannons, last_purchase}}
+ships: Dict[str, int] = {}  # {ship_name: user_id}
+leaderboard: List[Dict] = []  # [{user_id, ship_name, score, win_rate}]
 
-def get_ship_data(user_id):
-    if user_id not in ships_db:
-        ships_db[user_id] = {
-            "name": None,
-            "energy": 100,
-            "in_battle": False,
-            "current_strategy": None,
-            "battle_report": []
-        }
-    return ships_db[user_id]
+# Strategies and their counters
+STRATEGIES = [
+    "Camouflage as merchant ship",
+    "Night attack",
+    "Set enemy ship on fire",
+    "Board with grappling hooks",
+    "Ambush behind rocks",
+    "Deceive with fake treasure",
+    "Attack with spy assistance"
+]
+STRATEGY_COUNTERS = {
+    "Camouflage as merchant ship": ["Attack with spy assistance", "Ambush behind rocks"],
+    "Night attack": ["Attack with spy assistance"],
+    "Set enemy ship on fire": ["Board with grappling hooks"],
+    "Board with grappling hooks": ["Ambush behind rocks"],
+    "Ambush behind rocks": ["Deceive with fake treasure"],
+    "Deceive with fake treasure": ["Attack with spy assistance"],
+    "Attack with spy assistance": ["Camouflage as merchant ship"]
+}
 
-def calculate_win_rate(user_id):
-    user = get_user_data(user_id)
-    total = user["wins"] + user["losses"]
-    return round((user["wins"] / total) * 100, 1) if total > 0 else 0
-
-def update_energy(user_id, amount):
-    ship = get_ship_data(user_id)
-    ship["energy"] = max(0, min(100, ship["energy"] + amount))
-    return ship["energy"]
-
-def can_refill_energy(user_id):
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    if ship["last_energy_refill"] is None:
-        return True
-    now = datetime.now(pytz.utc)
-    return (now - ship["last_energy_refill"]).total_seconds() >= 86400  # 24 hours
-
-def generate_battle_report(user_strategy, enemy_strategy):
-    strategies = {
-        "camouflage": "استتار به عنوان کشتی تجاری",
-        "night_attack": "حمله شبانه",
-        "fire_ship": "آتش‌زدن کشتی دشمن",
-        "hook": "اتصال قلاب",
-        "ambush": "کمین پشت صخره‌",
-        "fake_treasure": "فریب با گنج جعلی",
-        "spy": "حمله با کمک جاسوس"
+# Initialize user data
+def init_user(user_id: int, ship_name: str):
+    users[user_id] = {
+        "ship_name": ship_name,
+        "gems": 5,
+        "gold": 10,
+        "silver": 15,
+        "energy": 90,
+        "wins": 0,
+        "total_games": 0,
+        "cannons": 3,
+        "last_purchase": {},
+        "strategy": None
     }
-    
-    # Strategy effectiveness matrix
-    effectiveness = {
-        "camouflage": {"weak": ["spy"], "strong": ["night_attack"]},
-        "night_attack": {"weak": ["fake_treasure"], "strong": ["hook"]},
-        "fire_ship": {"weak": ["ambush"], "strong": ["camouflage"]},
-        "hook": {"weak": ["fire_ship"], "strong": ["fake_treasure"]},
-        "ambush": {"weak": ["night_attack"], "strong": ["spy"]},
-        "fake_treasure": {"weak": ["hook"], "strong": ["ambush"]},
-        "spy": {"weak": ["camouflage"], "strong": ["fire_ship"]}
-    }
-    
-    report = []
-    report.append(f"استراتژی شما: {strategies[user_strategy]}")
-    report.append(f"استراتژی دشمن: {strategies[enemy_strategy]}")
-    
-    # Determine effectiveness
-    if enemy_strategy in effectiveness[user_strategy]["strong"]:
-        report.append("✅ استراتژی شما بر ضد دشمن بسیار موثر است!")
-        effectiveness_bonus = 1.3
-    elif enemy_strategy in effectiveness[user_strategy]["weak"]:
-        report.append("❌ استراتژی دشمن بر ضد شما موثر است!")
-        effectiveness_bonus = 0.7
-    else:
-        report.append("⚔️ استراتژی‌ها با هم برابرند!")
-        effectiveness_bonus = 1.0
-    
-    return report, effectiveness_bonus
+    ships[ship_name] = user_id
+    update_leaderboard(user_id)
 
-# Command handlers
+# Update leaderboard
+def update_leaderboard(user_id: int):
+    user = users.get(user_id)
+    if not user:
+        return
+    win_rate = (user["wins"] / user["total_games"] * 100) if user["total_games"] > 0 else 0
+    score = user["wins"] * 10
+    leaderboard[:] = [entry for entry in leaderboard if entry["user_id"] != user_id]
+    leaderboard.append({"user_id": user_id, "ship_name": user["ship_name"], "score": score, "win_rate": win_rate})
+    leaderboard.sort(key=lambda x: x["score"], reverse=True)
+
+# Validate ship name
+def is_valid_ship_name(name: str) -> bool:
+    return (
+        bool(re.match("^[A-Za-z ]+$", name)) and
+        name.lower() not in ["start", "menu"] and
+        name not in ships
+    )
+
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    ship = get_ship_data(user_id)
-    
-    if ship["name"] is None:
-        await update.message.reply_text(
-            "🏴‍☠️ به دنیای دزدان دریایی خوش اومدی، کاپیتان!\n\n"
-            "🚢 آماده‌ای کشتی‌تو بسازی و راهی دریا بشی؟\n\n"
-            "لطفا نام کشتی خود را وارد کن (فقط حروف انگلیسی، نه اسم تکراری و نه دستورات ربات):"
-        )
-    else:
+    if user_id in users:
         await show_main_menu(update, context)
-
-async def handle_ship_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text.strip()
-    ship = get_ship_data(user_id)
-    
-    if ship["name"] is not None:
-        return
-    
-    # Validate ship name
-    if any(cmd in text.lower() for cmd in ['/start', '/help', '/settings']):
-        await update.message.reply_text("این نام قابل قبول نیست. لطفا یک نام مناسب برای کشتی انتخاب کن:")
-        return
-    
-    if not text.isalpha():
-        await update.message.reply_text("نام کشتی باید فقط شامل حروف انگلیسی باشد. لطفا دوباره وارد کن:")
-        return
-    
-    # Check for duplicate names
-    if any(ship["name"] == text for ship in ships_db.values() if ship["name"] is not None):
-        await update.message.reply_text("این نام قبلا استفاده شده. لطفا نام دیگری انتخاب کن:")
-        return
-    
-    # Save ship name
-    ship["name"] = text
-    await update.message.reply_text(f"✅ کشتی شما با نام {text} ثبت شد!")
-    await show_main_menu(update, context)
-
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    
-    keyboard = [
-        [InlineKeyboardButton("شروع بازی ⚔️", callback_data="start_game")],
-        [InlineKeyboardButton("فروشگاه 🛒", callback_data="shop")],
-        [InlineKeyboardButton("برترین ناخدایان", callback_data="top_players")],
-        [InlineKeyboardButton("جستجوی کاربران", callback_data="search_players")],
-        [InlineKeyboardButton("اطلاعات کشتی", callback_data="ship_info")],
-        [InlineKeyboardButton("انرژی جنگجویان", callback_data="crew_energy")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        f"🏴‍☠️ کاپیتان {ship['name']}\n\n"
-        f"💎 جم: {user['gems']} | 🏆 امتیاز: {user['points']}\n"
-        f"💰 کیسه طلا: {user['gold']} | 🪙 شمش نقره: {user['silver']}\n"
-        f"⚡ انرژی: {ship['energy']}% | 🎯 میانگین پیروزی: {calculate_win_rate(user_id)}%\n"
-        f"💣 توپ: {user['cannon_balls']}"
-    )
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
     else:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            "🏴‍☠️ Welcome to the Pirate World, Captain!\n\n"
+            "🚢 Ready to build your ship and sail the seas?\n"
+            "Enter your ship's name (English only, no duplicates, not 'start' or 'menu'):"
+        )
+        context.user_data["state"] = "awaiting_ship_name"
 
-# Game handlers
-async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    ship = get_ship_data(user_id)
-    
-    if ship["in_battle"]:
-        await query.edit_message_text("شما در حال حاضر در یک نبرد هستید!")
-        return
-    
-    ship["in_battle"] = True
-    ship["current_strategy"] = None
-    ship["battle_report"] = []
-    
+# Handle text messages
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    state = context.user_data.get("state")
+    text = update.message.text
+
+    if state == "awaiting_ship_name":
+        if is_valid_ship_name(text):
+            init_user(user_id, text)
+            context.user_data.pop("state")
+            await update.message.reply_text(
+                f"🏗️ Your ship '{text}' is being built...\n"
+                "⚓ Built! Ready to sail, Captain!"
+            )
+            await show_main_menu(update, context)
+        else:
+            await update.message.reply_text(
+                "❌ Invalid ship name! Use English letters, no duplicates, and avoid 'start' or 'menu'."
+            )
+    elif state == "awaiting_payment_proof":
+        await forward_payment_proof(update, context, text)
+    elif state == "searching_user":
+        await handle_user_search(update, context, text)
+
+# Show main menu
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("دریانوردی ⛵️", callback_data="sail")],
-        [InlineKeyboardButton("استراتژی", callback_data="choose_strategy")],
-        [InlineKeyboardButton("توپ", callback_data="cannon_info")],
-        [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
+        [InlineKeyboardButton("⚔️ Start Game", callback_data="start_game")],
+        [InlineKeyboardButton("🛒 Shop", callback_data="shop")],
+        [InlineKeyboardButton("🏆 Top Captains", callback_data="leaderboard")],
+        [InlineKeyboardButton("🔍 Search Users", callback_data="search_users")],
+        [InlineKeyboardButton("🚢 Ship Info", callback_data="ship_info")],
+        [InlineKeyboardButton("⚡️ Warriors' Energy", callback_data="energy")]
     ]
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "⚔️ بخش جنگ:\n\n"
-        "گزینه مورد نظر را انتخاب کن:",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("🏴‍☠️ Pirate World Menu:", reply_markup=reply_markup)
 
-async def sail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handle button clicks
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+    data = query.data
     user_id = query.from_user.id
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    
-    if ship["energy"] < 20:
-        await query.edit_message_text("انرژی جنگجویان شما کمتر از ۲۰٪ است! قبل از نبرد باید انرژی را تامین کنید.")
+
+    if data == "start_game":
+        await show_game_menu(query, context)
+    elif data == "shop":
+        await show_shop_menu(query, context)
+    elif data == "leaderboard":
+        await show_leaderboard(query, context)
+    elif data == "search_users":
+        await start_user_search(query, context)
+    elif data == "ship_info":
+        await show_ship_info(query, context)
+    elif data == "energy":
+        await show_energy_menu(query, context)
+    elif data == "sailing":
+        await start_sailing(query, context)
+    elif data == "strategy":
+        await show_strategy_menu(query, context)
+    elif data == "cannons":
+        await check_cannons(query, context)
+    elif data.startswith("strategy_"):
+        await set_strategy(query, context, data.split("_")[1])
+    elif data == "fire_cannon":
+        await fire_cannon(query, context)
+    elif data == "shop_gems":
+        await show_gems_shop(query, context)
+    elif data == "shop_cannons":
+        await buy_cannons(query, context)
+    elif data == "shop_convert":
+        await show_convert_menu(query, context)
+    elif data.startswith("buy_gems_"):
+        await handle_gem_purchase(query, context, data.split("_")[2])
+    elif data.startswith("convert_"):
+        await handle_conversion(query, context, data.split("_")[1])
+    elif data.startswith("buy_energy_"):
+        await buy_energy_item(query, context, data.split("_")[2])
+    elif data == "back_to_menu":
+        await show_main_menu(query, context)
+
+# Game menu
+async def show_game_menu(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("⛵️ Sailing", callback_data="sailing")],
+        [InlineKeyboardButton("🎯 Strategy", callback_data="strategy")],
+        [InlineKeyboardButton("☄️ Cannons", callback_data="cannons")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text("⚔️ Game Menu:", reply_markup=reply_markup)
+
+# Sailing (battle)
+async def start_sailing(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    user = users.get(user_id)
+    if not user:
+        await query.message.reply_text("❌ Please start the game with /start first!")
         return
-    
+
     # Find opponent (real or fake)
     opponent_id = None
-    for uid, req in battle_requests.items():
-        if uid != user_id and req["status"] == "waiting":
+    for uid, data in users.items():
+        if uid != user_id and data["energy"] > 0:
             opponent_id = uid
             break
-    
-    if opponent_id is None:
-        # Use fake player
-        fake = random.choice(fake_players)
-        opponent_id = f"fake_{fake['name']}"
-        ship["opponent_strategy"] = fake["strategy"]
-    else:
-        # Real player
-        ship["opponent_strategy"] = ships_db[opponent_id]["current_strategy"]
-    
-    # Start battle
-    ship["battle_report"].append("⚔️ نبرد آغاز شد!")
-    ship["battle_report"].append("کشتی دشمن در افق ظاهر شد...")
-    
-    keyboard = [
-        [InlineKeyboardButton("پرتاب توپ ☄️", callback_data="fire_cannon")],
-        [InlineKeyboardButton("ادامه گزارش", callback_data="continue_report")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        ship["battle_report"][-1],
-        reply_markup=reply_markup
-    )
+    if not opponent_id:
+        opponent_id = -1  # Fake player
+        users[opponent_id] = {
+            "ship_name": "Ghost Ship",
+            "energy": 80,
+            "strategy": STRATEGIES[2],  # Random strategy for fake player
+            "cannons": 3
+        }
 
-async def continue_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    ship = get_ship_data(user_id)
-    
-    if len(ship["battle_report"]) < 3:
-        ship["battle_report"].append("به کشتی دشمن نزدیک می‌شویم...")
-    elif len(ship["battle_report"]) < 4:
-        ship["battle_report"].append("دشمن در حال مانور است...")
-    elif len(ship["battle_report"]) < 5:
-        ship["battle_report"].append("آماده حمله هستیم!")
-    
-    keyboard = [
-        [InlineKeyboardButton("پرتاب توپ ☄️", callback_data="fire_cannon")],
-        [InlineKeyboardButton("ادامه گزارش", callback_data="continue_report")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "\n".join(ship["battle_report"]),
-        reply_markup=reply_markup
-    )
-
-async def fire_cannon(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    
-    if user["cannon_balls"] <= 0:
-        await query.edit_message_text("توپ ندارید! لطفا به فروشگاه مراجعه کنید.")
-        return
-    
-    user["cannon_balls"] -= 1
-    
-    # Determine hit probability based on timing and energy
-    timing_factor = 0.65 if 2 <= len(ship["battle_report"]) < 5 else 0.1
-    energy_factor = ship["energy"] / 100
-    hit_probability = timing_factor * energy_factor
-    
-    if random.random() <= hit_probability:
-        ship["battle_report"].append("🎯 توپ شما به کشتی دشمن اصابت کرد!")
-        ship["battle_report"].append("دشمن آسیب دیده است!")
-    else:
-        ship["battle_report"].append("💥 توپ شما به هدف نخورد!")
-    
-    # Continue battle
-    keyboard = [
-        [InlineKeyboardButton("پرتاب توپ ☄️", callback_data="fire_cannon")],
-        [InlineKeyboardButton("ادامه گزارش", callback_data="continue_report")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "\n".join(ship["battle_report"]),
-        reply_markup=reply_markup
-    )
-
-async def choose_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("استتار به عنوان کشتی تجاری", callback_data="strategy_camouflage")],
-        [InlineKeyboardButton("حمله شبانه", callback_data="strategy_night_attack")],
-        [InlineKeyboardButton("آتش‌زدن کشتی دشمن", callback_data="strategy_fire_ship")],
-        [InlineKeyboardButton("اتصال قلاب", callback_data="strategy_hook")],
-        [InlineKeyboardButton("کمین پشت صخره‌", callback_data="strategy_ambush")],
-        [InlineKeyboardButton("فریب با گنج جعلی", callback_data="strategy_fake_treasure")],
-        [InlineKeyboardButton("حمله با کمک جاسوس", callback_data="strategy_spy")],
-        [InlineKeyboardButton("بازگشت", callback_data="start_game")]
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "🎯 انتخاب کن که با کدوم استراتژی حمله کنیم:",
-        reply_markup=reply_markup
-    )
-
-async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    ship = get_ship_data(user_id)
-    
-    strategy = query.data.replace("strategy_", "")
-    ship["current_strategy"] = strategy
-    
-    strategy_names = {
-        "camouflage": "استتار به عنوان کشتی تجاری",
-        "night_attack": "حمله شبانه",
-        "fire_ship": "آتش‌زدن کشتی دشمن",
-        "hook": "اتصال قلاب",
-        "ambush": "کمین پشت صخره‌",
-        "fake_treasure": "فریب با گنج جعلی",
-        "spy": "حمله با کمک جاسوس"
+    context.user_data["opponent_id"] = opponent_id
+    context.user_data["battle_state"] = {
+        "stage": 0,
+        "cannon_fired": False,
+        "cannon_hit": False
     }
-    
-    await query.edit_message_text(
-        f"استراتژی شما تنظیم شد به: {strategy_names[strategy]}"
-    )
-    await start_game(update, context)
+    await run_battle(query, context)
 
-async def cannon_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+async def run_battle(query: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
-    user = get_user_data(user_id)
-    
-    await query.edit_message_text(
-        f"💣 تعداد توپ‌های شما: {user['cannon_balls']}\n\n"
-        "هر توپ 3 جم در فروشگاه قیمت دارد.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("خرید توپ", callback_data="buy_cannon")],
-            [InlineKeyboardButton("بازگشت", callback_data="start_game")]
-        ])
-    )
+    opponent_id = context.user_data["opponent_id"]
+    user = users[user_id]
+    opponent = users[opponent_id]
+    battle_state = context.user_data["battle_state"]
+    stage = battle_state["stage"]
 
-# Shop handlers
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    keyboard = [
-        [InlineKeyboardButton("خرید جم 💎", callback_data="buy_gems")],
-        [InlineKeyboardButton("خرید توپ", callback_data="buy_cannon")],
-        [InlineKeyboardButton("تبدیل جم به سکه و نقره", callback_data="convert_gems")],
-        [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
+    reports = [
+        "🏴‍☠️ Your ship spots the enemy in the distance!",
+        "⛵ The enemy ship is closing in fast!",
+        "🔥 We're very close to the enemy now!"
     ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "🛒 فروشگاه:\n\n"
-        "گزینه مورد نظر را انتخاب کن:",
-        reply_markup=reply_markup
-    )
 
-async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+    if stage < len(reports):
+        keyboard = [[InlineKeyboardButton("☄️ Fire Cannon", callback_data="fire_cannon")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text(reports[stage], reply_markup=reply_markup)
+        battle_state["stage"] += 1
+    else:
+        await end_battle(query, context)
+
+async def fire_cannon(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    user = users[user_id]
+    battle_state = context.user_data["battle_state"]
+
+    if user["cannons"] <= 0:
+        await query.message.reply_text("❌ No cannons left! Head to the shop to buy more.")
+        return
+    if battle_state["cannon_fired"]:
+        await query.message.reply_text("❌ You've already fired in this battle!")
+        return
+
+    user["cannons"] -= 1
+    battle_state["cannon_fired"] = True
+    hit_chance = 0.65 if battle_state["stage"] == 3 else 0.10
+    import random
+    if random.random() < hit_chance:
+        battle_state["cannon_hit"] = True
+        await query.message.reply_text("🎯 Cannon hit the enemy ship!")
+    else:
+        await query.message.reply_text("💨 Cannon missed!")
+    await run_battle(query, context)
+
+async def end_battle(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    opponent_id = context.user_data["opponent_id"]
+    user = users[user_id]
+    opponent = users[opponent_id]
+    battle_state = context.user_data["battle_state"]
+
+    # Determine winner
+    user_score = user["energy"] * 0.5
+    opponent_score = opponent["energy"] * 0.5
+    if battle_state["cannon_hit"]:
+        user_score += 30
+    if user["strategy"] and opponent["strategy"]:
+        if opponent["strategy"] in STRATEGY_COUNTERS.get(user["strategy"], []):
+            opponent_score += 50
+            await query.message.reply_text(f"⚔️ {opponent['ship_name']}'s strategy ({opponent['strategy']}) countered yours ({user['strategy']})!")
+        elif user["strategy"] in STRATEGY_COUNTERS.get(opponent["strategy"], []):
+            user_score += 50
+            await query.message.reply_text(f"⚔️ Your strategy ({user['strategy']}) countered {opponent['ship_name']}'s ({opponent['strategy']})!")
+
+    winner = user_id if user_score > opponent_score else opponent_id
+    import random
+    if winner == user_id:
+        user["wins"] += 1
+        user["total_games"] += 1
+        user["energy"] = min(100, user["energy"] + 10)
+        user["gold"] += 3
+        user["silver"] += 5
+        if random.random() < 0.25:
+            user["gems"] += 1
+        await query.message.reply_text(
+            f"🏆 Victory! You defeated {opponent['ship_name']}!\n"
+            "+30 points, +3 gold, +5 silver, +10% energy" + (", +1 gem" if random.random() < 0.25 else "")
+        )
+    else:
+        user["total_games"] += 1
+        user["energy"] = max(0, user["energy"] - 30)
+        user["gold"] = max(0, user["gold"] - 3)
+        user["silver"] = max(0, user["silver"] - 5)
+        if random.random() < 0.25:
+            user["gems"] = max(0, user["gems"] - 1)
+        await query.message.reply_text(
+            f"💥 Defeat! {opponent['ship_name']} won!\n"
+            "-10 points, -3 gold, -5 silver, -30% energy" + (", -1 gem" if random.random() < 0.25 else "")
+        )
+
+    update_leaderboard(user_id)
+    if opponent_id != -1:
+        update_leaderboard(opponent_id)
+    context.user_data.pop("battle_state", None)
+    context.user_data.pop("opponent_id", None)
+    if opponent_id == -1:
+        users.pop(opponent_id, None)
+    await show_main_menu(query, context)
+
+# Strategy menu
+async def show_strategy_menu(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(s, callback_data=f"strategy_{s}")] for s in STRATEGIES]
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text("🎯 Choose your attack strategy:", reply_markup=reply_markup)
+
+async def set_strategy(query: Update, context: ContextTypes.DEFAULT_TYPE, strategy: str):
+    user_id = query.from_user.id
+    users[user_id]["strategy"] = strategy
+    await query.message.reply_text(f"✅ Strategy set to: {strategy}")
+    await show_game_menu(query, context)
+
+# Cannons
+async def check_cannons(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    user = users[user_id]
+    if user["cannons"] == 0:
+        await query.message.reply_text("❌ No cannons left! Head to the shop to buy more.")
+    else:
+        await query.message.reply_text(f"☄️ You have {user['cannons']} cannons ready!")
+    await show_game_menu(query, context)
+
+# Shop menu
+async def show_shop_menu(query: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("25 جم = ۵ ترون", callback_data="gem_25")],
-        [InlineKeyboardButton("50 جم = ۸ ترون", callback_data="gem_50")],
-        [InlineKeyboardButton("100 جم = ۱۴ ترون", callback_data="gem_100")],
-        [InlineKeyboardButton("بازگشت", callback_data="shop")]
+        [InlineKeyboardButton("💎 Buy Gems", callback_data="shop_gems")],
+        [InlineKeyboardButton("☄️ Buy Cannons", callback_data="shop_cannons")],
+        [InlineKeyboardButton("🔄 Convert Gems", callback_data="shop_convert")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
     ]
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "💎 خرید جم:\n\n"
-        "لطفا مقدار مورد نظر را انتخاب کنید:\n"
-        f"آدرس ترون: {TRX_ADDRESS}\n\n"
-        "بعد از پرداخت، رسید پرداخت را ارسال کنید.",
-        reply_markup=reply_markup
-    )
+    await query.message.reply_text("🛒 Shop Menu:", reply_markup=reply_markup)
 
-async def handle_payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_gems_shop(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("25 Gems = 5 TRX", callback_data="buy_gems_25")],
+        [InlineKeyboardButton("50 Gems = 8 TRX", callback_data="buy_gems_50")],
+        [InlineKeyboardButton("100 Gems = 14 TRX", callback_data="buy_gems_100")],
+        [InlineKeyboardButton("🔙 Back", callback_data="shop")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.reply_text(f"💎 Buy Gems (Send TRX to: {TRX_ADDRESS}):", reply_markup=reply_markup)
+
+async def handle_gem_purchase(query: Update, context: ContextTypes.DEFAULT_TYPE, amount: str):
+    context.user_data["state"] = "awaiting_payment_proof"
+    context.user_data["gem_amount"] = int(amount)
+    await query.message.reply_text("📸 Please send the payment receipt (image or text).")
+
+async def forward_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE, proof: str):
     user_id = update.effective_user.id
-    text = update.message.text
-    
-    # Forward to admin
+    gem_amount = context.user_data.get("gem_amount")
+    if not gem_amount:
+        await update.message.reply_text("❌ Error: No pending purchase.")
+        return
+
     await context.bot.send_message(
-        ADMIN_ID,
-        f"درخواست خرید جم از کاربر {user_id}\n\n"
-        f"رسید: {text}\n\n"
-        "برای تایید /confirm_{user_id}\n"
-        "برای رد /reject_{user_id}"
+        chat_id=ADMIN_ID,
+        text=f"Payment proof from user {user_id} for {gem_amount} gems:\n{proof}",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user_id}_{gem_amount}")],
+            [InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user_id}")]
+        ])
     )
-    
-    await update.message.reply_text("رسید شما به ادمین ارسال شد. پس از تایید، جم به حساب شما واریز می‌شود.")
+    await update.message.reply_text("✅ Proof sent to admin. Please wait for approval.")
+    context.user_data.pop("state")
+    context.user_data.pop("gem_amount")
 
-async def buy_cannon(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+async def handle_admin_response(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = query.data
+    if data.startswith("approve_"):
+        _, user_id, gem_amount = data.split("_")
+        user_id = int(user_id)
+        gem_amount = int(gem_amount)
+        users[user_id]["gems"] += gem_amount
+        await context.bot.send_message(user_id, f"✅ Payment approved! {gem_amount} gems added.")
+    elif data.startswith("reject_"):
+        _, user_id = data.split("_")
+        user_id = int(user_id)
+        await context.bot.send_message(user_id, "❌ Payment rejected by admin.")
+    await query.message.delete()
+
+async def buy_cannons(query: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
-    user = get_user_data(user_id)
-    
+    user = users[user_id]
     if user["gems"] < 3:
-        await query.edit_message_text("جم کافی ندارید! حداقل 3 جم نیاز دارید.")
+        await query.message.reply_text("❌ Not enough gems! Need 3 gems per cannon.")
         return
-    
     user["gems"] -= 3
-    user["cannon_balls"] += 1
-    
-    await query.edit_message_text(
-        f"✅ یک توپ خریداری شد!\n\n"
-        f"💎 جم باقیمانده: {user['gems']}\n"
-        f"💣 تعداد توپ‌ها: {user['cannon_balls']}",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("خرید مجدد", callback_data="buy_cannon")],
-            [InlineKeyboardButton("بازگشت", callback_data="shop")]
-        ])
-    )
+    user["cannons"] += 1
+    await query.message.reply_text("☄️ Cannon purchased successfully!")
+    await show_shop_menu(query, context)
 
-async def convert_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+async def show_convert_menu(query: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("1 جم = 2 کیسه طلا", callback_data="convert_1")],
-        [InlineKeyboardButton("3 جم = 6 کیسه طلا + 4 شمش نقره", callback_data="convert_3")],
-        [InlineKeyboardButton("10 جم = 20 کیسه طلا + 15 شمش نقره", callback_data="convert_10")],
-        [InlineKeyboardButton("بازگشت", callback_data="shop")]
+        [InlineKeyboardButton("1 Gem = 2 Gold", callback_data="convert_1")],
+        [InlineKeyboardButton("3 Gems = 6 Gold + 4 Silver", callback_data="convert_3")],
+        [InlineKeyboardButton("10 Gems = 20 Gold + 15 Silver", callback_data="convert_10")],
+        [InlineKeyboardButton("🔙 Back", callback_data="shop")]
     ]
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        "💱 تبدیل جم به سکه و نقره:\n\n"
-        "گزینه مورد نظر را انتخاب کن:",
-        reply_markup=reply_markup
-    )
+    await query.message.reply_text("🔄 Convert Gems:", reply_markup=reply_markup)
 
-async def perform_conversion(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+async def handle_conversion(query: Update, context: ContextTypes.DEFAULT_TYPE, amount: str):
     user_id = query.from_user.id
-    user = get_user_data(user_id)
-    
-    conversion = query.data.replace("convert_", "")
-    required_gems = int(conversion)
-    
-    if user["gems"] < required_gems:
-        await query.edit_message_text(f"جم کافی ندارید! برای این تبدیل به {required_gems} جم نیاز دارید.")
-        return
-    
-    user["gems"] -= required_gems
-    
-    if conversion == "1":
-        user["gold"] += 2
-        await query.edit_message_text(f"✅ تبدیل انجام شد!\n\n💎 جم باقیمانده: {user['gems']}\n💰 کیسه طلا: {user['gold']}")
-    elif conversion == "3":
-        user["gold"] += 6
-        user["silver"] += 4
-        await query.edit_message_text(f"✅ تبدیل انجام شد!\n\n💎 جم باقیمانده: {user['gems']}\n💰 کیسه طلا: {user['gold']}\n🪙 شمش نقره: {user['silver']}")
-    elif conversion == "10":
-        user["gold"] += 20
-        user["silver"] += 15
-        await query.edit_message_text(f"✅ تبدیل انجام شد!\n\n💎 جم باقیمانده: {user['gems']}\n💰 کیسه طلا: {user['gold']}\n🪙 شمش نقره: {user['silver']}")
-    
-    await shop(update, context)
-
-# Other menu handlers
-async def top_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    # Get top 10 players by points
-    top_players = sorted(users_db.items(), key=lambda x: x[1]["points"], reverse=True)[:10]
-    
-    text = "🏆 برترین ناخدایان:\n\n"
-    for i, (user_id, data) in enumerate(top_players, 1):
-        ship_name = ships_db.get(user_id, {}).get("name", "ناشناس")
-        win_rate = calculate_win_rate(user_id)
-        text += f"{i}. {ship_name} - 🏆 {data['points']} - 🎯 {win_rate}%\n"
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
-        ])
-    )
-
-async def search_players(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        "🔍 جستجوی کاربران:\n\n"
-        "لطفا نام کشتی کاربر مورد نظر را ارسال کنید:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
-        ])
-    )
-
-async def handle_player_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    search_term = update.message.text.strip().lower()
-    
-    found_players = []
-    for uid, ship in ships_db.items():
-        if ship["name"] and search_term in ship["name"].lower() and uid != user_id:
-            found_players.append((uid, ship["name"]))
-    
-    if not found_players:
-        await update.message.reply_text("کاربری با این نام یافت نشد.")
-        return
-    
-    keyboard = []
-    for uid, name in found_players[:5]:  # Limit to 5 results
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"request_battle_{uid}")])
-    
-    keyboard.append([InlineKeyboardButton("بازگشت", callback_data="main_menu")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        "نتایج جستجو:",
-        reply_markup=reply_markup
-    )
-
-async def request_battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    opponent_id = int(query.data.replace("request_battle_", ""))
-    
-    battle_requests[user_id] = {
-        "opponent_id": opponent_id,
-        "status": "waiting"
+    user = users[user_id]
+    conversions = {
+        "1": {"gems": 1, "gold": 2, "silver": 0},
+        "3": {"gems": 3, "gold": 6, "silver": 4},
+        "10": {"gems": 10, "gold": 20, "silver": 15}
     }
-    
-    # Notify opponent
-    try:
+    conv = conversions[amount]
+    if user["gems"] < conv["gems"]:
+        await query.message.reply_text("❌ Not enough gems!")
+        return
+    user["gems"] -= conv["gems"]
+    user["gold"] += conv["gold"]
+    user["silver"] += conv["silver"]
+    await query.message.reply_text(f"✅ Converted! +{conv['gold']} gold, +{conv['silver']} silver")
+    await show_shop_menu(query, context)
+
+# Leaderboard
+async def show_leaderboard(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "🏆 Top Captains:\n\n"
+    for i, entry in enumerate(leaderboard[:10], 1):
+        text += f"{i}. {entry['ship_name']} - {entry['score']} points, {entry['win_rate']:.1f}% win rate\n"
+    await query.message.reply_text(text or "No captains yet!")
+    await show_main_menu(query, context)
+
+# User search
+async def start_user_search(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["state"] = "searching_user"
+    await query.message.reply_text("🔍 Enter the ship name to search for a user:")
+
+async def handle_user_search(update: Update, context: ContextTypes.DEFAULT_TYPE, ship_name: str):
+    user_id = update.effective_user.id
+    opponent_id = ships.get(ship_name)
+    if not opponent_id or opponent_id == user_id:
+        await update.message.reply_text("❌ Ship not found or invalid!")
+        context.user_data.pop("state")
+        return
+    context.user_data["opponent_id"] = opponent_id
+    await update.message.reply_text(
+        f"⚔️ Found {ship_name}! Send battle request?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚔️ Request Battle", callback_data=f"request_battle_{opponent_id}")]
+        ])
+    )
+    context.user_data.pop("state")
+
+async def handle_battle_request(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = query.data
+    if data.startswith("request_battle_"):
+        opponent_id = int(data.split("_")[2])
         await context.bot.send_message(
             opponent_id,
-            f"⚔️ درخواست نبرد از {ships_db[user_id]['name']}!\n\n"
-            "آیا مایل به نبرد هستید؟",
+            f"⚔️ {users[query.from_user.id]['ship_name']} has challenged you to a friendly battle!",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ قبول", callback_data=f"accept_battle_{user_id}")],
-                [InlineKeyboardButton("❌ رد", callback_data=f"reject_battle_{user_id}")]
+                [InlineKeyboardButton("✅ Accept", callback_data=f"accept_battle_{query.from_user.id}")]
             ])
         )
-    except Exception as e:
-        logger.error(f"Failed to send battle request: {e}")
-        await query.edit_message_text("ارسال درخواست ناموفق بود. ممکن است کاربر ربات را مسدود کرده باشد.")
-        return
-    
-    await query.edit_message_text("درخواست نبرد ارسال شد. منتظر پاسخ حریف باشید...")
+        await query.message.reply_text("✅ Battle request sent! Waiting for response.")
 
-async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    win_rate = calculate_win_rate(user_id)
-    
-    text = (
-        f"🚢 اطلاعات کشتی {ship['name']}:\n\n"
-        f"💎 جم: {user['gems']}\n"
-        f"💰 کیسه طلا: {user['gold']}\n"
-        f"🪙 شمش نقره: {user['silver']}\n"
-        f"🎯 میانگین پیروزی: {win_rate}%\n"
-        f"⚡ انرژی: {ship['energy']}%\n"
-        f"💣 توپ: {user['cannon_balls']}"
-    )
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
-        ])
-    )
+async def handle_battle_accept(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = query.data
+    if data.startswith("accept_battle_"):
+        opponent_id = int(data.split("_")[2])
+        user_id = query.from_user.id
+        context.user_data["opponent_id"] = opponent_id
+        context.user_data["battle_state"] = {
+            "stage": 0,
+            "cannon_fired": False,
+            "cannon_hit": False,
+            "friendly": True
+        }
+        users[user_id]["cannons"] += 20
+        users[opponent_id]["cannons"] += 20
+        await query.message.reply_text("✅ Battle accepted! Starting friendly battle...")
+        await run_battle(query, context)
 
-async def crew_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+# Ship info
+async def show_ship_info(query: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
-    ship = get_ship_data(user_id)
-    user = get_user_data(user_id)
-    
-    can_refill = can_refill_energy(user_id)
-    
+    user = users[user_id]
+    win_rate = (user["wins"] / user["total_games"] * 100) if user["total_games"] > 0 else 0
     text = (
-        f"⚡ انرژی جنگجویان: {ship['energy']}%\n\n"
+        f"🚢 Ship Info: {user['ship_name']}\n"
+        f"💎 Gems: {user['gems']}\n"
+        f"🥇 Gold: {user['gold']}\n"
+        f"🥈 Silver: {user['silver']}\n"
+        f"🏆 Win Rate: {win_rate:.1f}%\n"
+        f"⚡️ Energy: {user['energy']}%"
     )
+    await query.message.reply_text(text)
+    await show_main_menu(query, context)
+
+# Energy menu
+async def show_energy_menu(query: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    user = users[user_id]
+    text = f"⚡️ Warriors' Energy: {user['energy']}%\n\n"
+    if user["energy"] < 50:
+        text += "⚠️ Your warriors are tired! Buy food to restore energy.\n"
     
-    if ship["energy"] < 50:
-        text += "⚠️ انرژی جنگجویان شما کم است! برای نبرد بهتر انرژی را افزایش دهید.\n\n"
-    
-    if can_refill:
-        text += "🛒 می‌توانید از گزینه‌های زیر برای افزایش انرژی استفاده کنید:"
-        keyboard = [
-            [InlineKeyboardButton("1 بسته بیسکویت دریایی (25%) - 4 شمش", callback_data="buy_biscuit")],
-            [InlineKeyboardButton("5 عدد ماهی خشک (35%) - 1 کیسه + 1 شمش", callback_data="buy_fish")],
-            [InlineKeyboardButton("3 بسته میوه خشک (30%) - 1 کیسه", callback_data="buy_fruit")],
-            [InlineKeyboardButton("10 قالب پنیر کهنه (50%) - 1 کیسه + 3 شمش", callback_data="buy_cheese")],
-            [InlineKeyboardButton("10 بطری آب (20%) - 3 شمش", callback_data="buy_water")],
-            [InlineKeyboardButton("بازگشت", callback_data="main_menu")]
-        ]
-    else:
-        last_refill = ship["last_energy_refill"].astimezone(pytz.timezone("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
-        next_refill = (ship["last_energy_refill"] + timedelta(days=1)).astimezone(pytz.timezone("Asia/Tehran")).strftime("%Y-%m-%d %H:%M")
-        text += (
-            f"⏳ شما امروز قبلا از فروشگاه خرید کرده‌اید.\n"
-            f"آخرین خرید: {last_refill}\n"
-            f"خرید بعدی: {next_refill}"
-        )
-        keyboard = [[InlineKeyboardButton("بازگشت", callback_data="main_menu")]]
-    
+    keyboard = [
+        [InlineKeyboardButton("Biscuit (25% energy, 4 silver)", callback_data="buy_energy_biscuit")],
+        [InlineKeyboardButton("Fish (35% energy, 1 gold + 1 silver)", callback_data="buy_energy_fish")],
+        [InlineKeyboardButton("Fruit (30% energy, 1 gold)", callback_data="buy_energy_fruit")],
+        [InlineKeyboardButton("Cheese (50% energy, 1 gold + 3 silver)", callback_data="buy_energy_cheese")],
+        [InlineKeyboardButton("Water (20% energy, 3 silver)", callback_data="buy_energy_water")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(text, reply_markup=reply_markup)
+    await query.message.reply_text(text, reply_markup=reply_markup)
 
-async def buy_energy_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
+async def buy_energy_item(query: Update, context: ContextTypes.DEFAULT_TYPE, item: str):
     user_id = query.from_user.id
-    user = get_user_data(user_id)
-    ship = get_ship_data(user_id)
-    
-    if not can_refill_energy(user_id):
-        await query.edit_message_text("شما امروز قبلا از فروشگاه خرید کرده‌اید. لطفا فردا مجددا مراجعه کنید.")
+    user = users[user_id]
+    now = datetime.utcnow()
+    last_purchase = user["last_purchase"].get(item, datetime.min)
+
+    if now - last_purchase < timedelta(hours=24):
+        await query.message.reply_text("❌ You can only buy each item once every 24 hours!")
         return
-    
-    item = query.data.replace("buy_", "")
-    success = False
-    
-    if item == "biscuit":
-        if user["silver"] >= 4:
-            user["silver"] -= 4
-            update_energy(user_id, 25)
-            success = True
-        else:
-            await query.edit_message_text("شمش نقره کافی ندارید!")
-    elif item == "fish":
-        if user["gold"] >= 1 and user["silver"] >= 1:
-            user["gold"] -= 1
-            user["silver"] -= 1
-            update_energy(user_id, 35)
-            success = True
-        else:
-            await query.edit_message_text("کیسه طلا یا شمش نقره کافی ندارید!")
-    elif item == "fruit":
-        if user["gold"] >= 1:
-            user["gold"] -= 1
-            update_energy(user_id, 30)
-            success = True
-        else:
-            await query.edit_message_text("کیسه طلا کافی ندارید!")
-    elif item == "cheese":
-        if user["gold"] >= 1 and user["silver"] >= 3:
-            user["gold"] -= 1
-            user["silver"] -= 3
-            update_energy(user_id, 50)
-            success = True
-        else:
-            await query.edit_message_text("کیسه طلا یا شمش نقره کافی ندارید!")
-    elif item == "water":
-        if user["silver"] >= 3:
-            user["silver"] -= 3
-            update_energy(user_id, 20)
-            success = True
-        else:
-            await query.edit_message_text("شمش نقره کافی ندارید!")
-    
-    if success:
-        ship["last_energy_refill"] = datetime.now(pytz.utc)
-        await query.edit_message_text(
-            f"✅ خرید با موفقیت انجام شد!\n\n"
-            f"⚡ انرژی جدید: {ship['energy']}%",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("بازگشت", callback_data="crew_energy")]
-            ])
-        )
-    else:
-        await crew_energy(update, context)
+
+    items = {
+        "biscuit": {"energy": 25, "silver": 4, "gold": 0},
+        "fish": {"energy": 35, "silver": 1, "gold": 1},
+        "fruit": {"energy": 30, "silver": 0, "gold": 1},
+        "cheese": {"energy": 50, "silver": 3, "gold": 1},
+        "water": {"energy": 20, "silver": 3, "gold": 0}
+    }
+    cost = items[item]
+    if user["gold"] < cost["gold"] or user["silver"] < cost["silver"]:
+        await query.message.reply_text("❌ Not enough resources!")
+        return
+
+    user["gold"] -= cost["gold"]
+    user["silver"] -= cost["silver"]
+    user["energy"] = min(100, user["energy"] + cost["energy"])
+    user["last_purchase"][item] = now
+    await query.message.reply_text(f"✅ Purchased! +{cost['energy']}% energy")
+    await show_energy_menu(query, context)
 
 # Webhook handler
 @app.post(WEBHOOK_PATH)
@@ -761,7 +582,7 @@ async def telegram_webhook(request: Request):
 @app.on_event("startup")
 async def on_startup():
     await application.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook set:", WEBHOOK_URL)
+    logger.info("Webhook set: %s", WEBHOOK_URL)
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
@@ -774,24 +595,12 @@ async def on_shutdown():
 
 # Register handlers
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ship_name))
-application.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
-application.add_handler(CallbackQueryHandler(start_game, pattern="^start_game$"))
-application.add_handler(CallbackQueryHandler(sail, pattern="^sail$"))
-application.add_handler(CallbackQueryHandler(continue_report, pattern="^continue_report$"))
-application.add_handler(CallbackQueryHandler(fire_cannon, pattern="^fire_cannon$"))
-application.add_handler(CallbackQueryHandler(choose_strategy, pattern="^choose_strategy$"))
-application.add_handler(CallbackQueryHandler(set_strategy, pattern="^strategy_"))
-application.add_handler(CallbackQueryHandler(cannon_info, pattern="^cannon_info$"))
-application.add_handler(CallbackQueryHandler(shop, pattern="^shop$"))
-application.add_handler(CallbackQueryHandler(buy_gems, pattern="^buy_gems$"))
-application.add_handler(CallbackQueryHandler(buy_cannon, pattern="^buy_cannon$"))
-application.add_handler(CallbackQueryHandler(convert_gems, pattern="^convert_gems$"))
-application.add_handler(CallbackQueryHandler(perform_conversion, pattern="^convert_"))
-application.add_handler(CallbackQueryHandler(top_players, pattern="^top_players$"))
-application.add_handler(CallbackQueryHandler(search_players, pattern="^search_players$"))
-application.add_handler(CallbackQueryHandler(ship_info, pattern="^ship_info$"))
-application.add_handler(CallbackQueryHandler(crew_energy, pattern="^crew_energy$"))
-application.add_handler(CallbackQueryHandler(buy_energy_item, pattern="^buy_"))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_player_search))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_payment_receipt))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(CallbackQueryHandler(button_handler, pattern="^(start_game|shop|leaderboard|search_users|ship_info|energy|sailing|strategy|cannons|shop_gems|shop_cannons|shop_convert|back_to_menu|fire_cannon|strategy_.*|buy_gems_.*|convert_.*|buy_energy_.*)$"))
+application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="^(approve_.*|reject_.*)$"))
+application.add_handler(CallbackQueryHandler(handle_battle_request, pattern="^request_battle_.*$"))
+application.add_handler(CallbackQueryHandler(handle_battle_accept, pattern="^accept_battle_.*$"))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
