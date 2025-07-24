@@ -14,7 +14,6 @@ application = ApplicationBuilder().token(TOKEN).build()
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    # اجرای متد async داخل لوپ جدید برای sync route
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(application.process_update(update))
@@ -31,4 +30,7 @@ async def setup():
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", "10000"))
     asyncio.run(setup())
-    app.run(host="0.0.0.0", port=PORT)
+
+    # اجرای flask با waitress روی پورت رندر
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=PORT)
