@@ -3,6 +3,7 @@ import logging
 import re
 import random
 import time
+import asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
@@ -36,7 +37,7 @@ pending_games = {}  # {user_id: opponent_id} for friend battles
 battle_reports = {}  # {user_id: [report_lines]}
 last_cannonball = {}  # {user_id: timestamp}
 
-# 📌 Start command
+# 📌 Start command with menu image
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in users:
@@ -51,9 +52,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("ℹ️ اطلاعات کشتی"), KeyboardButton("⚡ انرژی جنگجویان")]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(
-        "🏴‍☠️ به دنیای دزدان دریایی خوش اومدی، کاپیتان!\n\n"
-        "🚢 آماده‌ای کشتی‌تو بسازی و راهی دریا بشی؟\n\nانتخاب کن:",
+    # Replace with your actual image file ID or URL
+    menu_image = "YOUR_IMAGE_FILE_ID_OR_URL_HERE"  # Provide the image file ID or URL
+    await update.message.reply_photo(
+        photo=menu_image,
+        caption="Menu >>> /start\n\n"
+                "🏴‍☠️ به دنیای دزدان دریایی خوش اومدی، کاپیتان!\n\n"
+                "🚢 آماده‌ای کشتی‌تو بسازی و راهی دریا بشی؟\n\nانتخاب کن:",
         reply_markup=reply_markup
     )
 
@@ -71,12 +76,14 @@ async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text("🏴‍☠️ آماده جنگیدن، کاپیتان؟", reply_markup=reply_markup)
 
-# 📝 Handle ship name
+# 📝 Handle message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
-    if context.user_data.get("state") == "awaiting_ship_name":
-        if text in ["🏴‍☠️ شروع بازی ⚔️", "🛒 فروشگاه", "🏆 برترین ناخدایان", "🔍 جست‌وجوی کاربران", "ℹ️ اطلاعات کشتی", "⚡ انرژی جنگجویان", "/start"]:
+    state = context.user_data.get("state")
+
+    if state == "awaiting_ship_name":
+        if text in ["🏴‍☠️ شروع بازی ⚔️", "🛒 فروشگاه", "🏆 برترین ناخدایان", "🔍 جست‌وجوی کاربران", "ℹ️ اطلاعات کشتی", "⚡ انرژی جنگجویان", "/start", "⛵️ دریانوردی", "🎯 استراتژی", "☄️ توپ", "🏴‍☠️ بازگشت به منوی اصلی"]:
             await update.message.reply_text("لطفاً یه نام معتبر انگلیسی برای کشتی وارد کن!")
             return
         if not re.match("^[A-Za-z0-9 ]+$", text):
@@ -94,9 +101,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(f"کشتی {text} آماده دریانوردیه! 🛳️", reply_markup=reply_markup)
+    elif state == "awaiting_friend_name":
+        await process_friend_search(update, context, text)
+    elif state == "awaiting_receipt":
+        await process_receipt(update, context)
+    elif state == "shop":
+        await handle_shop(update, context, text)
+    elif state == "energy":
+        await handle_energy(update, context, text)
+    elif state == "game_menu":
+        if text == "⛵️ دریانوردی":
+            await sail(update, context)
+        elif text == "🎯 استراتژی":
+            await strategy(update, context)
+        elif text == "☄️ توپ":
+            await cannonballs(update, context)
+        elif text == "🏴‍☠️ بازگشت به منوی اصلی":
+            await start(update, context)
     elif text == "🏴‍☠️ شروع بازی ⚔️":
+        context.user_data["state"] = "game_menu"
         await start_game(update, context)
     elif text == "🛒 فروشگاه":
+        context.user_data["state"] = "shop"
         await shop(update, context)
     elif text == "🏆 برترین ناخدایان":
         await leaderboard(update, context)
@@ -105,19 +131,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "ℹ️ اطلاعات کشتی":
         await ship_info(update, context)
     elif text == "⚡ انرژی جنگجویان":
+        context.user_data["state"] = "energy"
         await energy(update, context)
-    elif text == "⛵️ دریانوردی":
-        await sail(update, context)
-    elif text == "🎯 استراتژی":
-        await strategy(update, context)
-    elif text == "☄️ توپ":
-        await cannonballs(update, context)
-    elif text == "🏴‍☠️ بازگشت به منوی اصلی":
-        await start(update, context)
-    elif context.user_data.get("state") == "awaiting_friend_name":
-        await process_friend_search(update, context, text)
-    elif context.user_data.get("state") == "awaiting_receipt":
-        await process_receipt(update, context)
 
 # ⛵️ Sailing (Battle)
 async def sail(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -136,8 +151,9 @@ async def sail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         start_time = time.time()
         while time.time() - start_time < 60:
-            opponent_id = random.choice([uid for uid in users.keys() if uid != user_id and users[uid]["ship_name"]])
-            if opponent_id:
+            online_users = [uid for uid in users.keys() if uid != user_id and users[uid]["ship_name"]]
+            if online_users:
+                opponent_id = random.choice(online_users)
                 break
             await asyncio.sleep(1)
         if not opponent_id:
@@ -244,10 +260,20 @@ async def strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text("🎯 کدوم استراتژی رو انتخاب می‌کنی؟", reply_markup=reply_markup)
+    context.user_data["state"] = "strategy"
+
+async def handle_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
+    user_id = update.effective_user.id
     strategies = ["استتار به عنوان کشتی تجاری", "حمله شبانه", "آتش‌زدن کشتی دشمن", "اتصال قلاب", "کمین پشت صخره‌", "فریب با گنج جعلی", "حمله با کمک جاسوس"]
-    if update.message.text in strategies:
-        users[user_id]["strategy"] = update.message.text
-        await update.message.reply_text(f"استراتژی {update.message.text} انتخاب شد! 🏴‍☠️")
+    if text in strategies:
+        users[user_id]["strategy"] = text
+        context.user_data["state"] = "game_menu"
+        await update.message.reply_text(f"استراتژی {text} انتخاب شد! 🏴‍☠️")
+    elif text == "🏴‍☠️ بازگشت به منوی اصلی":
+        context.user_data["state"] = None
+        await start(update, context)
+    else:
+        await update.message.reply_text("لطفاً یک استراتژی معتبر انتخاب کن!")
 
 # ☄️ Cannonballs
 async def cannonballs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -259,6 +285,7 @@ async def cannonballs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("توپ نداری! به فروشگاه برو و بخر! 🛒")
     else:
         await update.message.reply_text(f"تعداد توپ‌ها: {users[user_id]['cannonballs']} ☄️")
+    context.user_data["state"] = "game_menu"
 
 # 🛒 Shop
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -278,41 +305,48 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "تبدیل جم:\n1 جم = 2 کیسه طلا\n3 جم = 6 کیسه طلا + 4 شمش نقره\n10 جم = 20 کیسه طلا + 15 شمش نقره",
         reply_markup=reply_markup
     )
-    if update.message.text == "💎 خرید جم":
+    context.user_data["state"] = "shop"
+
+async def handle_shop(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
+    user_id = update.effective_user.id
+    if text == "💎 خرید جم":
         keyboard = [
             [KeyboardButton("25 جم"), KeyboardButton("50 جم"), KeyboardButton("100 جم")],
             [KeyboardButton("🏴‍☠️ بازگشت به منوی اصلی")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(f"آدرس ترون: {TRX_ADDRESS}\nمقدار مورد نظر رو انتخاب کن و فیش واریز رو بفرست:", reply_markup=reply_markup)
+        context.user_data["state"] = "shop_gems"
+    elif text in ["25 جم", "50 جم", "100 جم"]:
+        gems = {"25 جم": 25, "50 جم": 50, "100 جم": 100}
+        context.user_data["pending_gems"] = gems[text]
+        await update.message.reply_text(f"فیش واریز برای {text} رو بفرست:")
         context.user_data["state"] = "awaiting_receipt"
-    elif update.message.text == "☄️ خرید توپ":
+    elif text == "☄️ خرید توپ":
         if users[user_id]["gems"] < 3:
             await update.message.reply_text("جم کافی نداری! 🛒")
         else:
             users[user_id]["gems"] -= 3
             users[user_id]["cannonballs"] += 1
             await update.message.reply_text("یک توپ خریدی! ☄️")
-    elif update.message.text in ["25 جم", "50 جم", "100 جم"]:
-        gems = {"25 جم": 25, "50 جم": 50, "100 جم": 100}
-        context.user_data["pending_gems"] = gems[update.message.text]
-        await update.message.reply_text(f"فیش واریز برای {update.message.text} رو بفرست:")
-        context.user_data["state"] = "awaiting_receipt"
-    elif update.message.text == "تبدیل جم":
+        context.user_data["state"] = "shop"
+    elif text == "تبدیل جم":
         keyboard = [
             [KeyboardButton("1 جم = 2 کیسه طلا"), KeyboardButton("3 جم = 6 کیسه طلا + 4 شمش نقره")],
             [KeyboardButton("10 جم = 20 کیسه طلا + 15 شمش نقره"), KeyboardButton("🏴‍☠️ بازگشت به منوی اصلی")]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text("انتخاب کن:", reply_markup=reply_markup)
-    elif update.message.text == "1 جم = 2 کیسه طلا":
+        context.user_data["state"] = "shop_convert"
+    elif text == "1 جم = 2 کیسه طلا":
         if users[user_id]["gems"] < 1:
             await update.message.reply_text("جم کافی نداری!")
         else:
             users[user_id]["gems"] -= 1
             users[user_id]["gold"] += 2
             await update.message.reply_text("تبدیل شد! +2 کیسه طلا 🪙")
-    elif update.message.text == "3 جم = 6 کیسه طلا + 4 شمش نقره":
+        context.user_data["state"] = "shop"
+    elif text == "3 جم = 6 کیسه طلا + 4 شمش نقره":
         if users[user_id]["gems"] < 3:
             await update.message.reply_text("جم کافی نداری!")
         else:
@@ -320,7 +354,8 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["gold"] += 6
             users[user_id]["silver"] += 4
             await update.message.reply_text("تبدیل شد! +6 کیسه طلا +4 شمش نقره 🪙")
-    elif update.message.text == "10 جم = 20 کیسه طلا + 15 شمش نقره":
+        context.user_data["state"] = "shop"
+    elif text == "10 جم = 20 کیسه طلا + 15 شمش نقره":
         if users[user_id]["gems"] < 10:
             await update.message.reply_text("جم کافی نداری!")
         else:
@@ -328,6 +363,12 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["gold"] += 20
             users[user_id]["silver"] += 15
             await update.message.reply_text("تبدیل شد! +20 کیسه طلا +15 شمش نقره 🪙")
+        context.user_data["state"] = "shop"
+    elif text == "🏴‍☠️ بازگشت به منوی اصلی":
+        context.user_data["state"] = None
+        await start(update, context)
+    else:
+        await update.message.reply_text("لطفاً یک گزینه معتبر انتخاب کن!")
 
 async def process_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -345,7 +386,7 @@ async def process_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
     await update.message.reply_text("فیش ارسال شد. منتظر تأیید ادمین باش!")
-    context.user_data["state"] = None
+    context.user_data["state"] = "shop"
 
 async def admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -444,6 +485,7 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_time = time.time()
     if current_time - users[user_id]["last_purchase"] < 24 * 3600:
         await update.message.reply_text("هر 24 ساعت فقط یک‌بار می‌تونی خرید کنی!")
+        context.user_data["state"] = None
         return
     keyboard = [
         [KeyboardButton("1 بسته بیسکویت دریایی"), KeyboardButton("5 عدد ماهی خشک")],
@@ -461,7 +503,12 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "10 بطری آب: +20% انرژی (۳ شمش نقره)",
         reply_markup=reply_markup
     )
-    if update.message.text == "1 بسته بیسکویت دریایی":
+    context.user_data["state"] = "energy"
+
+async def handle_energy(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
+    user_id = update.effective_user.id
+    current_time = time.time()
+    if text == "1 بسته بیسکویت دریایی":
         if users[user_id]["silver"] < 4:
             await update.message.reply_text("نقره کافی نداری!")
         else:
@@ -469,7 +516,8 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["energy"] = min(100, users[user_id]["energy"] + 25)
             users[user_id]["last_purchase"] = current_time
             await update.message.reply_text("بیسکویت خریداری شد! +25% انرژی ⚡")
-    elif update.message.text == "5 عدد ماهی خشک":
+        context.user_data["state"] = "energy"
+    elif text == "5 عدد ماهی خشک":
         if users[user_id]["gold"] < 1 or users[user_id]["silver"] < 1:
             await update.message.reply_text("طلا یا نقره کافی نداری!")
         else:
@@ -478,7 +526,8 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["energy"] = min(100, users[user_id]["energy"] + 35)
             users[user_id]["last_purchase"] = current_time
             await update.message.reply_text("ماهی خشک خریداری شد! +35% انرژی ⚡")
-    elif update.message.text == "3 بسته میوه خشک‌شده":
+        context.user_data["state"] = "energy"
+    elif text == "3 بسته میوه خشک‌شده":
         if users[user_id]["gold"] < 1:
             await update.message.reply_text("طلا کافی نداری!")
         else:
@@ -486,7 +535,8 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["energy"] = min(100, users[user_id]["energy"] + 30)
             users[user_id]["last_purchase"] = current_time
             await update.message.reply_text("میوه خشک‌شده خریداری شد! +30% انرژی ⚡")
-    elif update.message.text == "10 قالب پنیر کهنه":
+        context.user_data["state"] = "energy"
+    elif text == "10 قالب پنیر کهنه":
         if users[user_id]["gold"] < 1 or users[user_id]["silver"] < 3:
             await update.message.reply_text("طلا یا نقره کافی نداری!")
         else:
@@ -495,7 +545,8 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["energy"] = min(100, users[user_id]["energy"] + 50)
             users[user_id]["last_purchase"] = current_time
             await update.message.reply_text("پنیر کهنه خریداری شد! +50% انرژی ⚡")
-    elif update.message.text == "10 بطری آب":
+        context.user_data["state"] = "energy"
+    elif text == "10 بطری آب":
         if users[user_id]["silver"] < 3:
             await update.message.reply_text("نقره کافی نداری!")
         else:
@@ -503,6 +554,12 @@ async def energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users[user_id]["energy"] = min(100, users[user_id]["energy"] + 20)
             users[user_id]["last_purchase"] = current_time
             await update.message.reply_text("آب خریداری شد! +20% انرژی ⚡")
+        context.user_data["state"] = "energy"
+    elif text == "🏴‍☠️ بازگشت به منوی اصلی":
+        context.user_data["state"] = None
+        await start(update, context)
+    else:
+        await update.message.reply_text("لطفاً یک گزینه معتبر انتخاب کن!")
 
 # 🔁 Webhook
 @app.post(WEBHOOK_PATH)
