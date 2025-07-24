@@ -11,7 +11,7 @@ TRX_ADDRESS = "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
 
 app = Flask(__name__)
 users = {}
-application: Application = Application.builder().token(TOKEN).build()
+application = Application.builder().token(TOKEN).build()
 
 
 def is_valid_ship_name(name):
