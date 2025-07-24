@@ -397,6 +397,8 @@ async def check_cannonballs(query, context):
         await query.message.reply_text(
             "توپ نداری! برو به فروشگاه و توپ بخر 🛒",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("منوی اصلی 🏴‍☠️", callback_data='main_menu')]])
+        )
+        
     else:
         await query.message.reply_text(
             f"تعداد توپ‌ها: {cannonballs} ☄️",
