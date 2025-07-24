@@ -283,10 +283,10 @@ def battle_update(context):
     user_id = job.context
     chat_id = job.chat_id
     
-    if "battle" not in context.user_data:
+    if "battle" not in context.bot_data.get(str(user_id), {}):
         return
 
-    battle = context.user_data["battle"]
+    battle = context.bot_data[str(user_id)]["battle"]
     
     stages = [
         "کشتی‌ها به هم نزدیک شدن! 🚢",
@@ -379,8 +379,8 @@ def battle_update(context):
             logger.error(f"Error sending battle result: {e}")
             context.bot.send_message(chat_id=chat_id, text=message, reply_markup=main_menu())
         
-        if "battle" in context.user_data:
-            del context.user_data["battle"]
+        if str(user_id) in context.bot_data and "battle" in context.bot_data[str(user_id)]:
+            del context.bot_data[str(user_id)]["battle"]
 
 # پرتاب توپ
 def fire_cannon(update, context):
@@ -388,11 +388,11 @@ def fire_cannon(update, context):
     query.answer()
     user_id = update.effective_user.id
     
-    if "battle" not in context.user_data:
+    if str(user_id) not in context.bot_data or "battle" not in context.bot_data[str(user_id)]:
         query.edit_message_text("هیچ جنگی در جریان نیست!", reply_markup=main_menu())
         return
 
-    battle = context.user_data["battle"]
+    battle = context.bot_data[str(user_id)]["battle"]
     
     conn = sqlite3.connect("pirates.db", check_same_thread=False)
     c = conn.cursor()
@@ -418,7 +418,6 @@ def fire_cannon(update, context):
         query.edit_message_text(
             "🎯 توپ به هدف خورد! شانس برنده شدنت بیشتر شد!",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("پرتاب توپ ☄️", callback_data="fire_cannon")]])
-        )
     else:
         query.edit_message_text(
             "💨 توپ خطا رفت!",
@@ -583,7 +582,7 @@ def challenge_friend(update, context):
     conn.close()
     
     # Store challenge info
-    context.user_data[f"challenge_{opponent_id}"] = {
+    context.bot_data[f"challenge_{opponent_id}"] = {
         "from_user": user_id,
         "from_ship": user_ship,
         "message_id": query.message.message_id
@@ -627,30 +626,21 @@ def accept_challenge(update, context):
     conn.close()
     
     # Store battle data for both users
-    context.user_data["battle"] = {
-        "opponent": (opponent_id, opponent_strategy, opponent_cannons, opponent_energy),
-        "user_cannons": user_cannons,
-        "opponent_cannons": opponent_cannons,
-        "user_strategy": user_strategy,
-        "opponent_strategy": opponent_strategy,
-        "stage": 0,
-        "last_cannon_time": time.time(),
-        "message_id": query.message.message_id,
-        "is_friendly": True
-    }
-    
-    # Also store for opponent
-    context.bot_data[f"battle_{opponent_id}"] = {
-        "opponent": (user_id, user_strategy, user_cannons, user_energy),
-        "user_cannons": opponent_cannons,
-        "opponent_cannons": user_cannons,
-        "user_strategy": opponent_strategy,
-        "opponent_strategy": user_strategy,
-        "stage": 0,
-        "last_cannon_time": time.time(),
-        "message_id": query.message.message_id,
-        "is_friendly": True
-    }
+    for uid, oid in [(user_id, opponent_id), (opponent_id, user_id)]:
+        if str(uid) not in context.bot_data:
+            context.bot_data[str(uid)] = {}
+            
+        context.bot_data[str(uid)]["battle"] = {
+            "opponent": (oid, opponent_strategy, opponent_cannons, opponent_energy),
+            "user_cannons": user_cannons if uid == user_id else opponent_cannons,
+            "opponent_cannons": opponent_cannons if uid == user_id else user_cannons,
+            "user_strategy": user_strategy if uid == user_id else opponent_strategy,
+            "opponent_strategy": opponent_strategy if uid == user_id else user_strategy,
+            "stage": 0,
+            "last_cannon_time": time.time(),
+            "message_id": query.message.message_id,
+            "is_friendly": True
+        }
     
     # Start battle for both users
     query.edit_message_text(
@@ -667,7 +657,7 @@ def accept_challenge(update, context):
     
     # Schedule battle updates
     context.job_queue.run_once(battle_update, 5, context=user_id, name=f"battle_{user_id}")
-    context.job_queue.run_once(battle_update, 5, context=opponent_id, chat_id=opponent_id, name=f"battle_{opponent_id}")
+    context.job_queue.run_once(battle_update, 5, context=opponent_id, name=f"battle_{opponent_id}")
 
 # اطلاعات کشتی
 def ship_info(update, context):
