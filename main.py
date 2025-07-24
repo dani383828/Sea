@@ -31,6 +31,5 @@ if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", "10000"))
     asyncio.run(setup())
 
-    # اجرای flask با waitress روی پورت رندر
     from waitress import serve
     serve(app, host="0.0.0.0", port=PORT)
