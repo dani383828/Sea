@@ -7,11 +7,12 @@ from telegram.ext import (
 )
 from datetime import datetime, timedelta
 import random
+import asyncio
 
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
-ADMIN_ID = 5542927340  # آیدی عددی ادمین (این رو تغییر بدید)
+ADMIN_ID = 5542927340  # آیدی عددی ادمین
 
 # ⚙️ لاگ‌گیری
 logging.basicConfig(
@@ -89,7 +90,6 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = None
     usernames = context.bot_data.get("usernames", {})
     
-    # جست‌وجو بر اساس آیدی عددی یا نام کاربری
     try:
         target_id = int(search_query)
         if target_id not in usernames:
@@ -126,39 +126,68 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای شروع بازی
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("دریانوردی ⛵️", callback_data="sailing")],
-        [InlineKeyboardButton("توپ ☄️", callback_data="cannon")]
+        ["دریانوردی ⛵️", "توپ ☄️"],
+        ["بازگشت به منو 🔙"]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text("انتخاب کن:", reply_markup=reply_markup)
 
+# 📌 هندلر برای بازگشت به منو
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+
 # 📌 هندلر برای پردازش بازی و خرید توپ
-async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text
+    if choice == "بازگشت به منو 🔙":
+        await back_to_menu(update, context)
+        return
     
-    if query.data == "sailing":
-        # شبیه‌سازی مچ‌میکینگ (۶۰ ثانیه برای پیدا کردن بازیکن آنلاین)
-        opponent_id = None  # اینجا باید سیستم مچ‌میکینگ واقعی باشه
-        await query.message.reply_text("در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)")
+    if choice == "دریانوردی ⛵️":
+        await update.message.reply_text("در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)")
+        await asyncio.sleep(60)  # صبر ۶۰ ثانیه برای مچ‌میکینگ
         
-        # اگر حریف آنلاین پیدا نشد، بازیکن فیک
+        opponent_id = None  # سیستم مچ‌میکینگ واقعی باید اینجا باشه
         if not opponent_id:
             opponent_name = "دزد دریایی ناشناس"
         else:
             opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
         
-        # محاسبه شانس پیروزی
+        # شروع بازی با گزارش‌های هیجان‌انگیز
         cannons = context.user_data.get("cannons", 0)
         energy = context.user_data.get("energy", 100)
-        win_chance = min(100, (cannons * 20) + (energy / 2))  # هر توپ ۲۰٪، هر ۱۰٪ انرژی ۵٪
-        opponent_chance = random.uniform(20, 80)  # شانس حریف فیک
+        opponent_cannons = random.randint(0, 3)  # تعداد توپ حریف فیک
+        messages = [
+            "🏴‍☠️ جنگ شروع شد! کشتی‌ها رو به هم نزدیک می‌شن...",
+            "🌊 موج‌های دریا خروشان شدن، آماده شلیک باش!",
+            "⚡ جنگجوهات با انرژی {}% دارن آماده می‌شن!".format(energy),
+            "🔥 دشمن داره آماده شلیک می‌شه!",
+            "⛵️ بادبان‌ها بالا، حالا وقت نبرده!",
+            "🏹 کاپیتان، باید استراتژی بچینیم!"
+        ]
+        
+        # اضافه کردن گزارش شلیک توپ
+        for i in range(cannons):
+            hit = random.random() < 0.7  # ۷۰٪ شانس برخورد
+            messages.append(f"☄️ شلیک توپ {i+1} از ما! {'برخورد کرد و کشتی دشمن آسیب دید!' if hit else 'خطا رفت!'}")
+        for i in range(opponent_cannons):
+            hit = random.random() < 0.7
+            messages.append(f"☄️ دشمن توپ {i+1} شلیک کرد! {'برخورد کرد و کشتیمون لرزید!' if hit else 'خطا رفت، شانس آوردیم!'}")
+        
+        # ارسال گزارش‌ها با فاصله ۱۰ ثانیه
+        for msg in messages[:6]:  # حداقل ۶ گزارش
+            await update.message.reply_text(msg)
+            await asyncio.sleep(10)
+        
+        # محاسبه شانس پیروزی
+        win_chance = min(100, (cannons * 20) + (energy / 2))
+        opponent_chance = random.uniform(20, 80)
         win = random.random() * 100 < win_chance
         
-        # گزارش بازی
+        # گزارش نهایی
         report = "کاپیتان، کشتیمون سوراخ شد!" if not win else "کاپیتان، دشمن رو غرق کردیم!"
         context.user_data["games"] = context.user_data.get("games", 0) + 1
-        context.user_data["energy"] = max(0, context.user_data.get("energy", 100) - 5)  # کاهش انرژی با هر بازی
+        context.user_data["energy"] = max(0, context.user_data.get("energy", 100) - 5)
         
         if win:
             context.user_data["wins"] = context.user_data.get("wins", 0) + 1
@@ -166,7 +195,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["gold"] = context.user_data.get("gold", 10) + 3
             context.user_data["silver"] = context.user_data.get("silver", 15) + 5
             context.user_data["energy"] = min(100, context.user_data.get("energy", 100) + 10)
-            if random.random() < 0.25:  # ۲۵٪ شانس جم
+            if random.random() < 0.25:
                 context.user_data["gems"] = context.user_data.get("gems", 5) + 1
                 report += "\nیه جم پیدا کردیم! 💎"
             report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
@@ -182,21 +211,21 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["energy"] = max(0, context.user_data.get("energy", 100) - 30)
             report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
         
-        await query.message.reply_text(f"بازی با {opponent_name}:\n{report}")
+        await update.message.reply_text(f"بازی با {opponent_name}:\n{report}")
     
-    elif query.data == "cannon":
+    elif choice == "توپ ☄️":
         free_cannons = context.user_data.get("free_cannons", 3)
         if free_cannons > 0:
             context.user_data["cannons"] = context.user_data.get("cannons", 0) + 1
             context.user_data["free_cannons"] = free_cannons - 1
-            await query.message.reply_text(f"یه توپ رایگان گرفتی! ({free_cannons - 1} توپ رایگان باقی مونده)")
+            await update.message.reply_text(f"یه توپ رایگان گرفتی! ({free_cannons - 1} توپ رایگان باقی مونده)")
         else:
             keyboard = [
                 [InlineKeyboardButton("خرید توپ (۱ جم)", callback_data="buy_cannon_gem")],
                 [InlineKeyboardButton("خرید توپ (۵ کیسه طلا)", callback_data="buy_cannon_gold")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.message.reply_text("توپ رایگان تموم شده! می‌تونی با جم یا طلا بخری:", reply_markup=reply_markup)
+            await update.message.reply_text("توپ رایگان تموم شده! می‌تونی با جم یا طلا بخری:", reply_markup=reply_markup)
 
 # 📌 هندلر برای خرید توپ
 async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,8 +263,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         requester_name = context.bot_data["usernames"].get(requester_id, "ناشناس")
         player_id = query.from_user.id
         
-        # محاسبه شانس پیروزی برای هر دو بازیکن
-        requester_data = context.user_data  # باید از سیستم ذخیره‌سازی واقعی داده‌های کاربر requester_id گرفته بشه
+        requester_data = context.user_data  # باید از سیستم ذخیره‌سازی واقعی گرفته بشه
         requester_cannons = context.user_data.get("cannons", 0)
         requester_energy = context.user_data.get("energy", 100)
         player_cannons = context.user_data.get("cannons", 0)
@@ -246,7 +274,6 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         win = random.random() * (requester_chance + player_chance) < requester_chance
         
-        # به‌روزرسانی برای بازیکن درخواست‌دهنده
         requester_data["games"] = requester_data.get("games", 0) + 1
         requester_data["energy"] = max(0, requester_data.get("energy", 100) - 5)
         report = "کاپیتان، کشتیمون سوراخ شد!" if not win else "کاپیتان، دشمن رو غرق کردیم!"
@@ -450,14 +477,13 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.Regex("🛒 فروشگاه"), shop))
 application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشتی"), ship_info))
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
-application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
+application.add_handler(MessageHandler(filters.Regex("^(⚔️ شروع بازی|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️)"), handle_username))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️)"), handle_search))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_search))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
-application.add_handler(CallbackQueryHandler(handle_game, pattern="^(sailing|cannon)$"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="(accept_game|reject_game)_.*"))
 
@@ -477,7 +503,7 @@ async def on_startup():
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
-    
+    await application.updater.start_polling()
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
