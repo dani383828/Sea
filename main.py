@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, ContextTypes,
 )
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -24,7 +25,24 @@ application = Application.builder().token(TOKEN).build()
 
 # 📌 هندلر برای /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏴‍☠️ خوش اومدی به دنیای دزدان دریایی!")
+    # تعریف کیبورد اینلاین
+    keyboard = [
+        [
+            InlineKeyboardButton("⚔️ شروع بازی", callback_data="start_game"),
+            InlineKeyboardButton("🛒 فروشگاه", callback_data="shop"),
+        ],
+        [
+            InlineKeyboardButton("🏴‍☠️ برترین ناخدایان", callback_data="top_captains"),
+            InlineKeyboardButton("🔍 جست و جوی کاربران", callback_data="search_users"),
+        ],
+        [
+            InlineKeyboardButton("📕 اطلاعات کشتی", callback_data="ship_info"),
+            InlineKeyboardButton("⚡️ انرژی جنگجویان", callback_data="warriors_energy"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text("🏴‍☠️ خوش اومدی به دنیای دزدان دریایی!", reply_markup=reply_markup)
 
 # 🔗 ثبت هندلر
 application.add_handler(CommandHandler("start", start))
