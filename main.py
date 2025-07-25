@@ -67,6 +67,7 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.bot_data.get("usernames"):
         context.bot_data["usernames"] = {}
     
+    # بررسی تکراری بودن نام (حساس به حروف بزرگ/کوچک)
     if username.lower() in [u.lower() for u in context.bot_data["usernames"].values()]:
         await update.message.reply_text("این اسم قبلاً انتخاب شده! یه اسم دیگه امتحان کن.")
         return
@@ -294,7 +295,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 requester_data["gold"] -= 3
             if requester_data.get("silver", 15) >= 5:
                 requester_data["silver"] -= 5
-            if random.random() < 0.25 and requester_data.get("gems", 5) >= 1:
+            if random.random() < 0.25 and context.user_data.get("gems", 5) >= 1:
                 requester_data["gems"] -= 1
                 report += "\nیه جم از دست دادیم! 😢"
             requester_data["energy"] = max(0, requester_data.get("energy", 100) - 30)
@@ -477,7 +478,8 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.Regex("🛒 فروشگاه"), shop))
 application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشتی"), ship_info))
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
-application.add_handler(MessageHandler(filters.Regex("^(⚔️ شروع بازی|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
+application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
+application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_username))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_search))
@@ -503,7 +505,7 @@ async def on_startup():
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
+    
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
