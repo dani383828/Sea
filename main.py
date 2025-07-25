@@ -11,7 +11,7 @@ import random
 TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
-ADMIN_ID = 123456789  # آیدی عددی ادمین (این رو تغییر بدید)
+ADMIN_ID = 5542927340  # آیدی عددی ادمین (این رو تغییر بدید)
 
 # ⚙️ لاگ‌گیری
 logging.basicConfig(
