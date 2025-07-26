@@ -856,7 +856,7 @@ async def on_startup():
         logger.info(f"Webhook set: {WEBHOOK_URL}")
         await application.initialize()
         await application.start()
-        await application.updater.start_polling()
+        
         logger.info("Application started successfully")
     except Exception as e:
         logger.error(f"Startup error: {e}")
