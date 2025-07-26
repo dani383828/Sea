@@ -82,6 +82,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان"],
         ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
+        ["≡ منو"]  # دکمه همبرگر جدید
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
@@ -89,6 +90,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
     save_data(context)
+
+# 📌 هندلر برای منوی همبرگر
+async def hamburger_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
 
 # 📌 هندلر برای دریافت نام کاربر
 async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,11 +203,25 @@ async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.bot_data["user_data"][user_id]
     
     if choice == "حمله گرایانه 🗡️":
+        keyboard = [
+            ["0%", "10%", "20%"],
+            ["35%", "50%", "65%"],
+            ["80%", "90%", "100%"],
+            ["بازگشت به منو 🔙"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        await update.message.reply_text("میزان قدرت حمله را انتخاب کنید:", reply_markup=reply_markup)
         user_data["state"] = "waiting_for_attack_strategy"
-        await update.message.reply_text("میزان قدرت حمله ات رو بگو! (۰ تا ۱۰۰)")
     elif choice == "دفاعی 🛡️":
+        keyboard = [
+            ["0%", "10%", "20%"],
+            ["35%", "50%", "65%"],
+            ["80%", "90%", "100%"],
+            ["بازگشت به منو 🔙"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+        await update.message.reply_text("میزان قدرت دفاع را انتخاب کنید:", reply_markup=reply_markup)
         user_data["state"] = "waiting_for_defense_strategy"
-        await update.message.reply_text("میزان قدرت دفاعت رو بگو! (۰ تا ۱۰۰)")
     elif choice == "بازگشت به منو 🔙":
         await back_to_menu(update, context)
     
@@ -223,12 +242,13 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     try:
-        value = int(update.message.text)
+        percent_str = update.message.text.replace("%", "")
+        value = int(percent_str)
         if value < 0 or value > 100:
-            await update.message.reply_text("لطفاً عددی بین ۰ تا ۱۰۰ وارد کن!")
+            await update.message.reply_text("لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
             return
     except ValueError:
-        await update.message.reply_text("لطفاً فقط عدد وارد کن!")
+        await update.message.reply_text("لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
         return
     
     if state == "waiting_for_attack_strategy":
@@ -742,6 +762,7 @@ async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.Regex("≡ منو"), hamburger_menu))  # هندلر جدید برای منوی همبرگر
 application.add_handler(MessageHandler(filters.Regex("🛒 فروشگاه"), shop))
 application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشتی"), ship_info))
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
@@ -749,8 +770,8 @@ application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی")
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️)$") & filters.UpdateType.MESSAGE, handle_username))
-application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+$") & ~filters.COMMAND, handle_strategy_input))
+application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))  # هندلر جدید برای درصدها
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|≡ منو|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
