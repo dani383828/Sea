@@ -211,7 +211,12 @@ async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای دریافت مقدار استراتژی
 async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
+    user_data = context.bot_data["user_data"].get(user_id)
+    
+    if not user_data:
+        await update.message.reply_text("لطفاً اول با دستور /start شروع کنید!")
+        return
+    
     state = user_data.get("state")
     
     if state not in ["waiting_for_attack_strategy", "waiting_for_defense_strategy"]:
@@ -220,23 +225,24 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         value = int(update.message.text)
         if value < 0 or value > 100:
-            raise ValueError
+            await update.message.reply_text("لطفاً عددی بین ۰ تا ۱۰۰ وارد کن!")
+            return
     except ValueError:
-        await update.message.reply_text("لطفاً عددی بین ۰ تا ۱۰۰ وارد کن!")
+        await update.message.reply_text("لطفاً فقط عدد وارد کن!")
         return
     
     if state == "waiting_for_attack_strategy":
         user_data["attack_strategy"] = value
         user_data["current_strategy"] = "aggressive" if value > 50 else "balanced"
-        await update.message.reply_text(f"قدرت حمله {value}% ذخیره شد ✅")
-    else:
+        await update.message.reply_text(f"✅ قدرت حمله {value}% ذخیره شد!")
+    elif state == "waiting_for_defense_strategy":
         user_data["defense_strategy"] = value
         user_data["current_strategy"] = "defensive" if value > 50 else "balanced"
-        await update.message.reply_text(f"قدرت دفاع {value}% ذخیره شد ✅")
+        await update.message.reply_text(f"✅ قدرت دفاع {value}% ذخیره شد!")
     
     user_data["state"] = None
-    await strategy_menu(update, context)
     save_data(context)
+    await strategy_menu(update, context)
 
 # 📌 هندلر برای بازگشت به منو
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
