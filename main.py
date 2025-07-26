@@ -77,11 +77,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان", "🔍 جست و جوی کاربران"],
-        ["📕 اطلاعات کشتی", "⚡️انرژی جنگجویان"],
+        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
-        f"🏴‍☠ خوش اومدی به دنیای دزدان دریایی، {context.bot_data['user_data'][user_id]['username']}!",
+        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {context.bot_data['user_data'][user_id]['username']}!",
         reply_markup=reply_markup
     )
     save_data(context)
@@ -119,7 +119,7 @@ async def search_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای پردازش جست‌وجو
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "state"waiting_for_search":
+    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "waiting_for_search":
         return
     
     search_query = update.message.text.strip()
@@ -155,7 +155,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         target_id,
-        f"کاربر {context.bot_data['user_data'][user_id]['username']} ({user_id}) بهت درخواست بازی دوستانه داده!"),
+        f"کاربر {context.bot_data['user_data'][user_id]['username']} ({user_id}) بهت درخواست بازی دوستانه داده!",
         reply_markup=reply_markup
     )
     await update.message.reply_text("درخواست بازی ارسال شد! منتظر جواب باش.")
@@ -350,7 +350,7 @@ async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_T
             context.bot_data["user_data"][user_id]["cannons"] += 1
             await query.message.reply_text("یه توپ با ۱ جم خریدی!")
         else:
-            await query.message.reply_textجم کافی نداری!")
+            await query.message.reply_text("جم کافی نداری!")
     elif query.data == "buy_cannon_gold":
         if context.bot_data["user_data"][user_id]["gold"] >= 5:
             context.bot_data["user_data"][user_id]["gold"] -= 5
@@ -415,7 +415,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 context.bot_data["user_data"][user_id]["silver"] -= 5
             if random.random() < 0.25 and context.bot_data["user_data"][user_id]["gems"] >= 1:
                 context.bot_data["user_data"][user_id]["gems"] -= 1
-                player_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم! 😢"
+                player_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم!"
             else:
                 player_report += "کاپیتان، کشتیمون سوراخ شد!"
             player_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
@@ -430,19 +430,19 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if random.random() < 0.25:
                 context.bot_data["user_data"][user_id]["gems"] += 1
                 player_report += "\nیه جم پیدا کردیم! 💎"
-            player_report += "\n\جایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
+            player_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
             
-            requester_data["score"] = max(0, requester_data.get("score", 0) + 10
-            if requester_data.get("gold", 10) 3:
+            requester_data["score"] = max(0, requester_data.get("score", 0) - 10)
+            if requester_data.get("gold", 10) >= 3:
                 requester_data["gold"] -= 3
             if requester_data.get("silver", 15) >= 5:
                 requester_data["silver"] -= 5
             if random.random() < 0.25 and requester_data.get("gems", 5) >= 1:
                 requester_data["gems"] -= 1
-                requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم! 😢"
+                requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم!"
             else:
-                requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢"
-            requester_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳-۳۰٪ انرژی"
+                requester_report += "کاپیتان، کشتیمون سوراخ شد!"
+            requester_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
             requester_data["energy"] = max(0, requester_data["energy"] - 30)
         
         await context.bot.send_message(requester_id, requester_report)
@@ -459,8 +459,7 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "🛒 فروشگاه:\n"
-        "انتخاب کن چه مقدار جم می‌خوای بخری:",
+        "🛒 فروشگاه:\nانتخاب کنید چه مقدار جم می‌خواهید بخرید:",
         reply_markup=reply_markup
     )
 
@@ -499,23 +498,23 @@ async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ("۱ بسته بیسکویت دریایی (۲۵٪ انرژی)", "biscuit", 0, 4, 25),
         ("۵ عدد ماهی خشک (۳۵٪ انرژی)", "fish", 1, 1, 35),
         ("۳ بسته میوه خشک‌شده (۳۰٪ انرژی)", "fruit", 1, 0, 30),
-        ("۱۰ قالب پنیر کهنه (۵۰٪ انرژی)", "cheese", 1, 3, 50),
+        ("۱۰ قالب پنیر کهنه (۵۰٪ انرژی)", "cheese", 1, 50),
         ("۱۰ بطری آب (۲۰٪ انرژی)", "water", 0, 3, 20),
     ]
     
     for item_name, item_id, gold_cost, silver_cost, energy_gain in items:
         last_time = last_purchase.get(item_id)
-        if not last_time or (now - last_time).total_seconds() >= 24 * 3600:
+        if not last_purchase or (now - last_time).total_seconds() >= 24 * 3600:
             available_items.append(
-                [InlineKeyboardButton(f"{item_name} - قیمت: {gold_cost} طلا, {silver_cost} نقره", callback_data=f"buy_{item_id}")]
+                [InlineKeyboardButton(f"{item_name} - قیمت: {gold_cost} طلا، {silver_cost} نقره", callback_data=f"buy_{item_id}")]
             )
     
     reply_markup = InlineKeyboardMarkup(available_items) if available_items else None
-    text = f"⚡️انرژی جنگجویان: {energy}%\n"
+    text = f"⚡️ انرژی جنگجویان: {energy}%\n"
     if energy < 100:
-        text += "اگه جنگجویانت خستن، باید براشون خوراکی بخری!"
+        text += "اگر جنگجویان شما خسته‌اند، باید برایشان خوراکی بخرید!"
     else:
-        text += "جنگجویان تو پر از انرژی‌ان!"
+        text += "جنگجویان شما پر از انرژی‌اند!"
     
     await update.message.reply_text(text, reply_markup=reply_markup)
 
@@ -539,7 +538,7 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data["user_data"][user_id]["pending_gems"] = gems
         await query.message.reply_text(
             f"لطفاً {tron} ترون به آدرس زیر ارسال کنید و فیش پرداخت رو بفرستید:\n"
-            "TJ4xrwKJzKjk6FgKfVqRw8h3Qz5Ur22kLkb"
+            "TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
         )
     save_data(context)
 
@@ -555,7 +554,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("تأیید ✅", callback_data=f"confirm_{user_id}_{pending_gems}")],
         [InlineKeyboardButton("رد ❌", callback_data=f"reject_{user_id}")]
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard)
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.message.photo:
         await context.bot.send_photo(
@@ -571,13 +570,12 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
     
-    await update.message.reply_text("فیش شما به ادمین ارسال شد! منتظر تأیید باشید!")
+    await update.message.reply_text("فیش شما به ادمین ارسال شد. منتظر تأیید باشید!")
     save_data(context)
 
 # 📌 هندلر برای تأیید/رد فیش توسط ادمین
 async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
     await query.answer()
     
     data = query.data
@@ -586,13 +584,13 @@ async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TY
         user_id, gems = int(user_id), int(gems)
         context.bot_data["user_data"][user_id]["gems"] += gems
         context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, f"خرید شما تأیید شد! {gems} جم به حسابت اضافه شد.")
+        await context.bot.send_message(user_id, f"خرید شما تأیید شد! {گems} جم به حسابتون اضافه شد.")
         await query.message.edit_reply_markup(reply_markup=None)
     elif data.startswith("reject_"):
         _, user_id = data.split("_")
         user_id = int(user_id)
         context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, "خرید شما رد شد. لطفاً دوباره تلاش کنید.")
+        await context.bot.send_message(user_id, "خرید شما رد شد. لطفاً دوباره تلاش کنید!")
         await query.message.edit_reply_markup(reply_markup=None)
     save_data(context)
 
@@ -642,10 +640,10 @@ application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵�
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_username))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_search))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)$"))
+application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
-application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="(accept_game|reject_game)_.*"))
+application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(accept_game|reject_game)_.*"))
 application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_receipt))
 
 # 🔁 وب‌هوک تلگرام
