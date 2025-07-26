@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 )
@@ -46,6 +46,14 @@ def load_data(context: ContextTypes.DEFAULT_TYPE):
             context.bot_data["usernames"] = data.get("usernames", {})
             context.bot_data["user_data"] = {int(user_id): data for user_id, data in data.get("user_data", {}).items()}
 
+# 📌 تابع برای تنظیم منوی همبرگری تلگرام
+async def set_bot_menu(context: ContextTypes.DEFAULT_TYPE):
+    commands = [
+        BotCommand(command="start", description="شروع بازی دزدان دریایی 🏴‍☠️")
+    ]
+    await context.bot.set_my_commands(commands)
+    logger.info("Bot menu set with /start command")
+
 # 📌 هندلر برای /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -82,7 +90,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان"],
         ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
-        ["≡ منو"]  # دکمه همبرگر جدید
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
@@ -90,10 +97,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
     save_data(context)
-
-# 📌 هندلر برای منوی همبرگر
-async def hamburger_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start(update, context)
 
 # 📌 هندلر برای دریافت نام کاربر
 async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -670,7 +673,7 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data["user_data"][user_id]["pending_gems"] = gems
         await query.message.reply_text(
             f"لطفاً {tron} ترون به آدرس زیر ارسال کنید و فیش پرداخت رو بفرستید:\n"
-            "TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
+            "TYfZ3G8yKz8jK6GkjWqSw9i5C6VsM6mMkN"
         )
     save_data(context)
 
@@ -762,7 +765,6 @@ async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.Regex("≡ منو"), hamburger_menu))  # هندلر جدید برای منوی همبرگر
 application.add_handler(MessageHandler(filters.Regex("🛒 فروشگاه"), shop))
 application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشتی"), ship_info))
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
@@ -770,8 +772,8 @@ application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی")
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
-application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))  # هندلر جدید برای درصدها
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|≡ منو|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
+application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
@@ -790,11 +792,11 @@ async def telegram_webhook(request: Request):
 @app.on_event("startup")
 async def on_startup():
     load_data(application)
+    await set_bot_menu(application)  # تنظیم منوی همبرگری
     await application.bot.set_webhook(url=WEBHOOK_URL)
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
-    
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
