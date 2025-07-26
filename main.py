@@ -372,6 +372,9 @@ async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     elif choice == "استراتژی ⚔️":
         await strategy_menu(update, context)
+    
+    elif choice in ["حمله گرایانه 🗡️", "دفاعی 🛡️"]:
+        await set_strategy(update, context)
 
 # 📌 هندلر برای خرید توپ
 async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -419,6 +422,8 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         wins = requester_data.get("wins", 0)
         games = requester_data.get("games", 0)
         energy = requester_data.get("energy", 100)
+        attack = requester_data.get("attack_strategy", 50)
+        defense = requester_data.get("defense_strategy", 50)
         win_rate = (wins / games * 100) if games > 0 else 0
         
         text = (
@@ -428,7 +433,9 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"کیسه طلا: {gold}\n"
             f"شمش نقره: {silver}\n"
             f"میانگین پیروزی: {win_rate:.1f}%\n"
-            f"انرژی: {energy}%"
+            f"انرژی: {energy}%\n"
+            f"قدرت حمله: {attack}%\n"
+            f"قدرت دفاع: {defense}%"
         )
         
         keyboard = [
@@ -734,7 +741,7 @@ application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشت
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
 application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
-application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️)$"), handle_game_options))
+application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\d+$") & ~filters.COMMAND, handle_strategy_input))
