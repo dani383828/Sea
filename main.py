@@ -650,7 +650,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["💎 خرید جم"],
-        ["☄️ خرید توپ (۱ توپ = ۳ 💎 | ۳ توپ = ۷ 💎 | ۱۰ توپ = ۱۸ 💎 | ۲۰ توپ = ۳۰ 💎)"],
+        ["☄️ خرید توپ"],
         ["🔙 بازگشت به منو"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -658,6 +658,106 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛒 فروشگاه دزدان دریایی 🌊:\n🌟 گزینه‌ها رو انتخاب کن:",
         reply_markup=reply_markup
     )
+    save_data(context)
+
+# 📌 هندلر برای پردازش گزینه‌های فروشگاه
+async def handle_shop_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    choice = update.message.text
+    user_data = context.bot_data["user_data"][user_id]
+
+    if choice == "💎 خرید جم":
+        keyboard = [
+            [InlineKeyboardButton("۲۵ جم = ۵ ترون", callback_data="buy_25_gems")],
+            [InlineKeyboardButton("۵۰ جم = ۸ ترون", callback_data="buy_50_gems")],
+            [InlineKeyboardButton("۱۰۰ جم = ۱۴ ترون", callback_data="buy_100_gems")],
+            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_shop")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "💎 لطفاً گزینه مورد نظرت رو برای خرید جم انتخاب کن:",
+            reply_markup=reply_markup
+        )
+    elif choice == "☄️ خرید توپ":
+        keyboard = [
+            [InlineKeyboardButton("۱ توپ = ۳ جم", callback_data="buy_1_cannon")],
+            [InlineKeyboardButton("۳ توپ = ۷ جم", callback_data="buy_3_cannons")],
+            [InlineKeyboardButton("۱۰ توپ = ۱۸ جم", callback_data="buy_10_cannons")],
+            [InlineKeyboardButton("۲۰ توپ = ۳۰ جم", callback_data="buy_20_cannons")],
+            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_shop")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "☄️ تعداد توپ مورد نظرت رو انتخاب کن:",
+            reply_markup=reply_markup
+        )
+    elif choice == "🔙 بازگشت به منو":
+        await back_to_menu(update, context)
+
+    save_data(context)
+
+# 📌 هندلر برای انجام خریدهای فروشگاه
+async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+    
+    data = query.data
+    user_data = context.bot_data["user_data"][user_id]
+
+    if data == "buy_25_gems":
+        gems, tron = 25, 5
+        if gems:
+            user_data["pending_gems"] = gems
+            await query.message.reply_text(
+                f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
+            )
+    elif data == "buy_50_gems":
+        gems, tron = 50, 8
+        if gems:
+            user_data["pending_gems"] = gems
+            await query.message.reply_text(
+                f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
+            )
+    elif data == "buy_100_gems":
+        gems, tron = 100, 14
+        if gems:
+            user_data["pending_gems"] = gems
+            await query.message.reply_text(
+                f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
+            )
+    elif data == "buy_1_cannon":
+        if user_data["gems"] >= 3:
+            user_data["gems"] -= 3
+            user_data["cannons"] += 1
+            await query.message.reply_text("☄️ 💎 ۱ توپ با ۳ جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ 💎 جم کافی نیست!")
+    elif data == "buy_3_cannons":
+        if user_data["gems"] >= 7:
+            user_data["gems"] -= 7
+            user_data["cannons"] += 3
+            await query.message.reply_text("☄️ 💎 ۳ توپ با ۷ جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ 💎 جم کافی نیست!")
+    elif data == "buy_10_cannons":
+        if user_data["gems"] >= 18:
+            user_data["gems"] -= 18
+            user_data["cannons"] += 10
+            await query.message.reply_text("☄️ 💎 ۱۰ توپ با ۱۸ جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ 💎 جم کافی نیست!")
+    elif data == "buy_20_cannons":
+        if user_data["gems"] >= 30:
+            user_data["gems"] -= 30
+            user_data["cannons"] += 20
+            await query.message.reply_text("☄️ 💎 ۲۰ توپ با ۳۰ جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ 💎 جم کافی نیست!")
+    elif data == "back_to_shop":
+        await shop(update, context)
+
+    await query.message.delete()
     save_data(context)
 
 # 📌 هندلر برای اطلاعات کشتی
@@ -852,6 +952,7 @@ application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu)_.*"))
+application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$"), handle_shop_purchase))
 
 # 🔁 وب‌هوک تلگرام
 @app.post(WEBHOOK_PATH)
