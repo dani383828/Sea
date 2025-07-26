@@ -827,29 +827,6 @@ async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-# 📌 هندلر برای خرید جم
-async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    data = query.data
-    gems = 0
-    tron = 0
-    if data == "buy_25_gems":
-        gems, tron = 25, 5
-    elif data == "buy_50_gems":
-        gems, tron = 50, 8
-    elif data == "buy_100_gems":
-        gems, tron = 100, 14
-    
-    if gems:
-        context.bot_data["user_data"][user_id]["pending_gems"] = gems
-        await query.message.reply_text(
-            f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
-        )
-    save_data(context)
-
 # 📌 هندلر برای دریافت فیش
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -952,6 +929,7 @@ application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu)_.*"))
+application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_(1|3|10|20)_cannons"))
 application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$"), handle_shop_purchase))
 
 # 🔁 وب‌هوک تلگرام
