@@ -137,6 +137,20 @@ async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
+# 📌 تابع برای جست‌وجوی حریف
+async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int):
+    await update.message.reply_text("در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)")
+    await asyncio.sleep(60)  # صبر ۶۰ ثانیه برای مچ‌میکینگ
+    
+    opponent_id = None  # سیستم مچ‌میکینگ واقعی باید اینجا باشه
+    if not opponent_id:
+        opponent_name = "دزد دریایی ناشناس"
+    else:
+        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
+    
+    opponent_cannons = random.randint(0, 3)  # تعداد توپ حریف فیک
+    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons)
+
 # 📌 تابع برای ارسال گزارش‌های بازی
 async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int):
     # لیست پیام‌های هیجان‌انگیز و متنوع
@@ -237,20 +251,9 @@ async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     if choice == "دریانوردی ⛵️":
-        await update.message.reply_text("در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)")
-        await asyncio.sleep(60)  # صبر ۶۰ ثانیه برای مچ‌میکینگ
-        
-        opponent_id = None  # سیستم مچ‌میکینگ واقعی باید اینجا باشه
-        if not opponent_id:
-            opponent_name = "دزد دریایی ناشناس"
-        else:
-            opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
-        
-        # شروع بازی با گزارش‌های هیجان‌انگیز به‌صورت غیرهمزمان
         cannons = context.user_data.get("cannons", 0)
         energy = context.user_data.get("energy", 100)
-        opponent_cannons = random.randint(0, 3)  # تعداد توپ حریف فیک
-        asyncio.create_task(send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons))
+        asyncio.create_task(search_opponent(update, context, cannons, energy))
     
     elif choice == "توپ ☄️":
         free_cannons = context.user_data.get("free_cannons", 3)
@@ -517,12 +520,12 @@ application.add_handler(MessageHandler(filters.Regex("🛒 فروشگاه"), sho
 application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشتی"), ship_info))
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
 application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
-application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|باز)$"), handle_game_options))
+application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒 |📕 |⚡️ |⚔️ |🔍 |💎 |دریانوردی|توپ|باز)"), handle_username))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒 |📕 |⚡️ |⚔️ |🔍 |💎 |دریانوردی |توپ )"), handle_search))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_search))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_*(biscuit|fish|fruit|cheese|water)*"))
+application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="(accept_game|reject_game)_.*"))
@@ -543,7 +546,7 @@ async def on_startup():
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
-    
+    await application.updater.start_polling()
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
