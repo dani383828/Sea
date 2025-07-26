@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 )
@@ -46,14 +46,6 @@ def load_data(context: ContextTypes.DEFAULT_TYPE):
             context.bot_data["usernames"] = data.get("usernames", {})
             context.bot_data["user_data"] = {int(user_id): data for user_id, data in data.get("user_data", {}).items()}
 
-# 📌 تابع برای تنظیم منوی همبرگری تلگرام
-async def set_bot_menu(context: ContextTypes.DEFAULT_TYPE):
-    commands = [
-        BotCommand(command="start", description="شروع بازی دزدان دریایی 🏴‍☠️")
-    ]
-    await context.bot.set_my_commands(commands)
-    logger.info("Bot menu set with /start command")
-
 # 📌 هندلر برای /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -90,6 +82,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان"],
         ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
+        ["≡ منو"]  # دکمه همبرگری اضافه شده
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
@@ -357,7 +350,7 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             report += "\nیه جم پیدا کردیم! 💎"
         report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
     else:
-        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_data"][user_id]["score"] - 10)
+        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_id"]["score"] - 10)
         if context.bot_data["user_data"][user_id]["gold"] >= 3:
             context.bot_data["user_data"][user_id]["gold"] -= 3
         if context.bot_data["user_data"][user_id]["silver"] >= 5:
@@ -673,7 +666,7 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data["user_data"][user_id]["pending_gems"] = gems
         await query.message.reply_text(
             f"لطفاً {tron} ترون به آدرس زیر ارسال کنید و فیش پرداخت رو بفرستید:\n"
-            "TYfZ3G8yKz8jK6GkjWqSw9i5C6VsM6mMkN"
+            "TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
         )
     save_data(context)
 
@@ -773,7 +766,7 @@ application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
 application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|≡ منو|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
@@ -792,7 +785,6 @@ async def telegram_webhook(request: Request):
 @app.on_event("startup")
 async def on_startup():
     load_data(application)
-    await set_bot_menu(application)  # تنظیم منوی همبرگری
     await application.bot.set_webhook(url=WEBHOOK_URL)
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
