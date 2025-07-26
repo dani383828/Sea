@@ -77,7 +77,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
-        ["🏴‍☠️ برترین ناخدایان", "🔍 جست و جوی کاربران"],
+        ["🏴‍☠️ برترین ناخدایان"],
         ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -112,73 +112,9 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     save_data(context)
 
-# 📌 هندلر برای جست‌وجوی کاربران
-async def search_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = "waiting_for_search"
-    await update.message.reply_text("اسم دوستت رو که تو بات به انگلیسی سیو شده وارد کن:")
-    save_data(context)
-
-# 📌 هندلر برای پردازش جست‌وجو
-async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "waiting_for_search":
-        logger.info(f"User {user_id} sent text but not in waiting_for_search state")
-        return
-    
-    search_query = update.message.text.strip()
-    logger.info(f"User {user_id} searched for: {search_query}")
-    target_id = None
-    usernames = context.bot_data.get("usernames", {})
-    logger.info(f"Available usernames: {usernames}")
-    
-    for uid, username in usernames.items():
-        if username.lower() == search_query.lower():
-            target_id = uid
-            break
-    
-    if not target_id:
-        await update.message.reply_text("کاربر پیدا نشد! دوباره امتحان کن.")
-        context.bot_data["user_data"][user_id]["state"] = None
-        save_data(context)
-        return
-    
-    if target_id == user_id:
-        await update.message.reply_text("نمی‌تونی خودت رو دعوت کنی!")
-        context.bot_data["user_data"][user_id]["state"] = None
-        save_data(context)
-        return
-    
-    # نمایش اطلاعات کشتی کاربر پیدا شده
-    target_data = context.bot_data["user_data"].get(target_id, {})
-    gems = target_data.get("gems", 5)
-    gold = target_data.get("gold", 10)
-    silver = target_data.get("silver", 15)
-    wins = target_data.get("wins", 0)
-    games = target_data.get("games", 0)
-    energy = target_data.get("energy", 100)
-    win_rate = (wins / games * 100) if games > 0 else 0
-    
-    text = (
-        f"📕 اطلاعات کشتی {target_data.get('username', f'دزد دریایی {target_id}')}:\n"
-        f"جم: {gems}\n"
-        f"کیسه طلا: {gold}\n"
-        f"شمش نقره: {silver}\n"
-        f"میانگین پیروزی: {win_rate:.1f}%\n"
-        f"انرژی: {energy}%"
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("بازگشت به منو ❌", callback_data="back_to_menu")],
-        [InlineKeyboardButton("درخواست جنگ دوستانه ✅", callback_data=f"request_friend_game_{target_id}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, reply_markup=reply_markup)
-    context.bot_data["user_data"][user_id]["state"] = None
-    save_data(context)
-
 # 📌 هندلر برای برترین ناخدایان
 async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
     user_data = context.bot_data.get("user_data", {})
     if not user_data:
         await update.message.reply_text("هنوز هیچ ناخدایی در بازی ثبت نشده!")
@@ -191,15 +127,22 @@ async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )[:10]
     
     text = "🏴‍☠️ برترین ناخدایان:\n\n"
-    for i, (user_id, data) in enumerate(sorted_players, 1):
-        username = data.get("username", f"دزد دریایی {user_id}")
+    for i, (player_id, data) in enumerate(sorted_players, 1):
+        username = data.get("username", f"دزد دریایی {player_id}")
         score = data.get("score", 0)
         wins = data.get("wins", 0)
         games = data.get("games", 0)
         win_rate = (wins / games * 100) if games > 0 else 0
         text += f"{i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n"
+        if player_id != user_id:  # فقط برای بازیکن‌های غیر از خود کاربر دکمه اضافه کن
+            keyboard = [[InlineKeyboardButton("دعوت به جنگ دوستانه ✅", callback_data=f"request_friend_game_{player_id}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(text, reply_markup=reply_markup)
+            text = ""  # برای بازیکن بعدی متن جدید شروع بشه
+        else:
+            await update.message.reply_text(text)
+            text = ""
     
-    await update.message.reply_text(text)
     save_data(context)
 
 # 📌 هندلر برای شروع بازی
@@ -722,10 +665,8 @@ application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشت
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
 application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
-application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_username))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_search))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
