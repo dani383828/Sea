@@ -21,6 +21,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # 📦 FastAPI app
 app = FastAPI()
@@ -93,6 +94,7 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     username = update.message.text.strip()
+    logger.info(f"User {user_id} entered username: {username}")
     if not username.isascii():
         await update.message.reply_text("لطفاً اسم رو به انگلیسی وارد کن!")
         return
@@ -121,11 +123,14 @@ async def search_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "waiting_for_search":
+        logger.info(f"User {user_id} sent text but not in waiting_for_search state")
         return
     
     search_query = update.message.text.strip()
+    logger.info(f"User {user_id} searched for: {search_query}")
     target_id = None
     usernames = context.bot_data.get("usernames", {})
+    logger.info(f"Available usernames: {usernames}")
     
     for uid, username in usernames.items():
         if username.lower() == search_query.lower():
@@ -508,7 +513,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "🌊 طوفان در راهه! دریا داره خشمگین می‌شه!",
             f"⚡ جنگجوهات با انرژی {requester_energy}% دارن عرشه رو آماده می‌کنن!",
             "🔥 دشمن با پرچم سیاه در دیدرسه! آماده شلیک!",
-            "⛵️ بادبان‌ها بالاست! حالا وقت حمله‌ست، کاپیتان!",
+            "⛵️ بادبان‌ها بالاست! حالا وقت حمله‌ست، کاپیتان!"
         ]
         for i in range(requester_cannons):
             hit = random.random() < 0.5
@@ -719,14 +724,13 @@ application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی")
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
 application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_username))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_search))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_search))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu)_.*"))
-application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, handle_receipt))
 
 # 🔁 وب‌هوک تلگرام
 @app.post(WEBHOOK_PATH)
