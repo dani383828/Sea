@@ -1,20 +1,20 @@
 import os
 import json
 import logging
+import random
+import asyncio
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 )
 from datetime import datetime, timedelta
-import random
-import asyncio
 
-TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
+TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3h3Az5Ur4kI"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
 ADMIN_ID = 5542927340  # آیدی عددی ادمین
-DATA_FILE = "game_data.json"  # فایل ذخیره‌سازی داده‌ها
+DATA_FILE = "/mnt/data/game_data.json"  # فایل ذخیره‌سازی داده‌ها با دیسک پایدار
 
 # ⚙️ لاگ‌گیری
 logging.basicConfig(
@@ -33,7 +33,7 @@ application = Application.builder().token(TOKEN).build()
 def save_data(context: ContextTypes.DEFAULT_TYPE):
     data = {
         "usernames": context.bot_data.get("usernames", {}),
-        "user_data": {str(user_id): data for user_id, data in context.bot_data.get("user_data", {}).items()}
+        "user_data": {str(user_id): data for user_id, data in context.bot_data.get("usernames", {}).items()}
     }
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, ensure_ascii=False)
@@ -72,6 +72,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "score": 0,
             "cannons": 0,
             "free_cannons": 3,
+            "attack_power": 50,  # مقدار پیش‌فرض
+            "defense_power": 50,  # مقدار پیش‌فرض
             "initialized": True
         })
     
@@ -112,6 +114,72 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
     save_data(context)
 
+# 📌 هندلر برای شروع بازی
+async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    context.bot_data["user_data"][user_id]["state"] = None
+    keyboard = [
+        ["دریانوردی ⛵️", "توپ ☄️"],
+        ["استراتژی 🧠", "بازگشت به منو 🔙"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    await update.message.reply_text("انتخاب کن:", reply_markup=reply_markup)
+    save_data(context)
+
+# 📌 هندلر برای استراتژی
+async def strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    context.bot_data["user_data"][user_id]["state"] = None
+    keyboard = [
+        [InlineKeyboardButton("استراتژی حمله‌گرایانه ⚔️", callback_data="strategy_attack")],
+        [InlineKeyboardButton("استراتژی دفاعی 🛡️", callback_data="strategy_defense")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("استراتژی خودت رو انتخاب کن:", reply_markup=reply_markup)
+    save_data(context)
+
+# 📌 هندلر برای انتخاب استراتژی
+async def handle_strategy_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+    
+    if query.data == "strategy_attack":
+        context.bot_data["user_data"][user_id]["state"] = "waiting_for_attack_power"
+        await query.message.reply_text("میزان قدرت حمله‌ات رو بگو! (0 تا 100)")
+    elif query.data == "strategy_defense":
+        context.bot_data["user_data"][user_id]["state"] = "waiting_for_defense_power"
+        await query.message.reply_text("میزان قدرت دفاع‌ات رو بگو! (0 تا 100)")
+    
+    await query.message.delete()
+    save_data(context)
+
+# 📌 هندلر برای دریافت مقدار استراتژی
+async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    state = context.bot_data["user_data"][user_id].get("state")
+    if state not in ["waiting_for_attack_power", "waiting_for_defense_power"]:
+        return
+    
+    try:
+        value = int(update.message.text.strip())
+        if not 0 <= value <= 100:
+            await update.message.reply_text("لطفاً یه عدد بین 0 تا 100 وارد کن!")
+            return
+    except ValueError:
+        await update.message.reply_text("لطفاً یه عدد معتبر وارد کن!")
+        return
+    
+    if state == "waiting_for_attack_power":
+        context.bot_data["user_data"][user_id]["attack_power"] = value
+        await update.message.reply_text("ذخیره شد ✅")
+    elif state == "waiting_for_defense_power":
+        context.bot_data["user_data"][user_id]["defense_power"] = value
+        await update.message.reply_text("ذخیره شد ✅")
+    
+    context.bot_data["user_data"][user_id]["state"] = None
+    save_data(context)
+
 # 📌 هندلر برای برترین ناخدایان
 async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -134,27 +202,15 @@ async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         games = data.get("games", 0)
         win_rate = (wins / games * 100) if games > 0 else 0
         text += f"{i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n"
-        if player_id != user_id:  # فقط برای بازیکن‌های غیر از خود کاربر دکمه اضافه کن
+        if player_id != user_id:
             keyboard = [[InlineKeyboardButton("دعوت به جنگ دوستانه ✅", callback_data=f"request_friend_game_{player_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(text, reply_markup=reply_markup)
-            text = ""  # برای بازیکن بعدی متن جدید شروع بشه
+            text = ""
         else:
             await update.message.reply_text(text)
             text = ""
     
-    save_data(context)
-
-# 📌 هندلر برای شروع بازی
-async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = None
-    keyboard = [
-        ["دریانوردی ⛵️", "توپ ☄️"],
-        ["بازگشت به منو 🔙"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("انتخاب کن:", reply_markup=reply_markup)
     save_data(context)
 
 # 📌 هندلر برای بازگشت به منو
@@ -174,8 +230,6 @@ async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
     opponent_id = None
     if not opponent_id:
         opponent_name = "دزد دریایی ناشناس"
-    else:
-        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
     
     opponent_cannons = random.randint(0, 3)
     await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons)
@@ -184,46 +238,26 @@ async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
 # 📌 تابع برای ارسال گزارش‌های بازی
 async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int):
     user_id = update.message.from_user.id
+    attack_power = context.bot_data["user_data"][user_id].get("attack_power", 50)
+    defense_power = context.bot_data["user_data"][user_id].get("defense_power", 50)
+    opponent_attack_power = random.randint(20, 80)
+    opponent_defense_power = random.randint(20, 80)
+    
     messages = [
         "🏴‍☠️ نبرد آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن!",
         "🌊 طوفان در راهه! دریا داره خشمگین می‌شه!",
         f"⚡ جنگجوهات با انرژی {energy}% دارن عرشه رو آماده می‌کنن!",
         "🔥 دشمن با پرچم سیاه در دیدرسه! آماده شلیک!",
         "⛵️ بادبان‌ها بالاست! حالا وقت حمله‌ست، کاپیتان!",
-        "🏹 خدمه دارن توپ‌ها رو پر می‌کنن! منتظر دستورت هستیم!",
-        "💥 انفجار در افق! دشمن داره آماده می‌شه!",
-        "🌪️ گردباد دریا رو به هم ریخته! باید تمرکز کنیم!",
-        "⚔️ شمشیرها تیز، جنگجوهات آماده‌ان! به پیش!",
-        "🛡️ دشمن سپرش رو بالا برده! باید نقطه‌ضعفش رو پیدا کنیم!",
-        "🌌 ستاره‌ها امشب شاهد یه نبرد حماسی‌ان!",
-        "🔦 فانوس کشتی دشمن روشن شد! دارن به ما نزدیک می‌شن!",
-        "🦜 طوطی روی دکل فریاد می‌زنه: دشمن در تیررسه!",
-        "🪝 قلاب‌های دشمن آماده‌ان! مراقب باشن به کشتیمون نچسبن!",
-        "🌬️ باد به نفع ماست! حالا وقت شلیکه، کاپیتان!",
-        "🧨 باروت‌ها آماده‌ان! فقط یه جرقه کافیه!",
-        "🛠️ خدمه دارن عرشه رو تعمیر می‌کنن، ولی دشمن نزدیکه!",
-        "🔍 دشمن تو مه غلیظ پنهان شده! چشماتو تیز کن!",
-        "🔔 زنگ خطر به صدا دراومد! همه به پست‌هاشون!",
-        "🌑 ماه امشب پشت ابره، دشمن داره یواشکی نزدیک می‌شه!",
-        "🦑 یه موجود عظیم زیر آب دیده شده! دریا امشب خطرناکه!",
-        "🔥 دود از کشتی دشمن بلند شد! انگار دارن آماده می‌شن!",
-        "⚡ رعد و برق آسمان رو شکافت! وقتشه ضربه بزنیم!",
-        "🛶 قایق‌های دشمن دارن بهمون نزدیک می‌شن! آماده دفاع!",
-        "🪓 تبرهای جنگجوهات تیز شدن! وقتشه دشمن رو خرد کنیم!",
-        "🌊 یه موج عظیم کشتی رو تکون داد! باید تعادل رو حفظ کنیم!",
-        "🔫 تفنگ‌های دشمن آماده‌ان! باید سریع عمل کنیم!",
-        "🧙‍♂️ جادوی دریا امشب عجیبه! انگار به نفع ماست!",
-        "🛑 دشمن یه تله گذاشته! باید دورش بزنیم!",
-        "🌬️ باد یه دفعه عوض شد! حالا دشمن تو موقعیت بهتریه!",
-        "🦈 کوسه‌ها دور کشتی دشمن جمع شدن! شاید به نفع ماست!",
-        "🪘 طبل‌های جنگ به صدا دراومد! وقت نبرده، کاپیتان!"
+        f"⚔️ قدرت حمله تو: {attack_power}% - قدرت دفاع دشمن: {opponent_defense_power}%",
+        f"🛡️ قدرت دفاع تو: {defense_power}% - قدرت حمله دشمن: {opponent_attack_power}%"
     ]
     
     for i in range(cannons):
-        hit = random.random() < 0.5
+        hit = random.random() < (attack_power / 100)
         messages.append(f"☄️ شلیک توپ {i+1} از ما! {'برخورد کرد و عرشه دشمن ترکید!' if hit else 'تو آب افتاد، خطا رفت!'}")
     for i in range(opponent_cannons):
-        hit = random.random() < 0.5
+        hit = random.random() < (opponent_attack_power / 100)
         messages.append(f"☄️ دشمن توپ {i+1} شلیک کرد! {'برخورد کرد و دکلمون لرزید!' if hit else 'کنار کشتی افتاد، شانس آوردیم!'}")
     
     num_reports = random.randint(6, 20)
@@ -236,9 +270,9 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(msg)
         await asyncio.sleep(interval)
     
-    win_chance = min(100, (cannons * 20) + (energy / 2))
-    opponent_chance = random.uniform(20, 80)
-    win = random.random() * 100 < win_chance
+    win_chance = (cannons * 15) + (energy / 2) + (attack_power * 0.4) - (opponent_defense_power * 0.3)
+    opponent_chance = (opponent_cannons * 15) + 50 + (opponent_attack_power * 0.4) - (defense_power * 0.3)
+    win = random.random() * (win_chance + opponent_chance) < win_chance
     
     report = "کاپیتان، کشتیمون سوراخ شد!" if not win else "کاپیتان، دشمن رو غرق کردیم!"
     context.bot_data["user_data"][user_id]["games"] += 1
@@ -295,7 +329,11 @@ async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text("توپ رایگان تموم شده! می‌تونی با جم یا طلا بخری:", reply_markup=reply_markup)
-        save_data(context)
+    
+    elif choice == "استراتژی 🧠":
+        await strategy(update, context)
+    
+    save_data(context)
 
 # 📌 هندلر برای خرید توپ
 async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,6 +358,17 @@ async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_T
     await query.message.delete()
     save_data(context)
 
+# 📌 تابع برای درخواست استراتژی از بازیکن
+async def request_strategy(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    context.bot_data["user_data"][user_id]["state"] = None
+    keyboard = [
+        [InlineKeyboardButton("استراتژی حمله‌گرایانه ⚔️", callback_data="strategy_attack")],
+        [InlineKeyboardButton("استراتژی دفاعی 🛡️", callback_data="strategy_defense")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(user_id, "قبل از جنگ دوستانه، استراتژی خودت رو انتخاب کن:", reply_markup=reply_markup)
+    save_data(context)
+
 # 📌 هندلر برای پردازش درخواست جنگ دوستانه
 async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -333,16 +382,34 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query.data.startswith("request_friend_game_"):
         target_id = int(query.data.split("_")[3])
         requester_id = user_id
-        requester_data = context.bot_data["user_data"].get(requester_id, {})
-        requester_name = requester_data.get("username", f"دزد دریایی {requester_id}")
         
-        # اطلاعات کشتی درخواست‌دهنده
+        # چک کردن استراتژی درخواست‌دهنده
+        requester_data = context.bot_data["user_data"].get(requester_id, {})
+        if "attack_power" not in requester_data or "defense_power" not in requester_data:
+            await request_strategy(context, requester_id)
+            await query.message.reply_text("لطفاً اول استراتژی‌ات رو مشخص کن!")
+            await query.message.delete()
+            return
+        
+        # چک کردن استراتژی هدف
+        target_data = context.bot_data["user_data"].get(target_id, {})
+        if "attack_power" not in target_data or "defense_power" not in target_data:
+            await request_strategy(context, target_id)
+            await query.message.reply_text(f"درخواست جنگ دوستانه برای {context.bot_data['usernames'].get(target_id, 'ناشناس')} ارسال شد! منتظر تعیین استراتژی حریف باش.")
+            context.bot_data["user_data"][requester_id]["pending_friendly_game"] = target_id
+            await query.message.delete()
+            save_data(context)
+            return
+        
+        requester_name = requester_data.get("username", f"دزد دریایی {requester_id}")
         gems = requester_data.get("gems", 5)
         gold = requester_data.get("gold", 10)
         silver = requester_data.get("silver", 15)
         wins = requester_data.get("wins", 0)
         games = requester_data.get("games", 0)
         energy = requester_data.get("energy", 100)
+        attack_power = requester_data.get("attack_power", 50)
+        defense_power = requester_data.get("defense_power", 50)
         win_rate = (wins / games * 100) if games > 0 else 0
         
         text = (
@@ -352,7 +419,9 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"کیسه طلا: {gold}\n"
             f"شمش نقره: {silver}\n"
             f"میانگین پیروزی: {win_rate:.1f}%\n"
-            f"انرژی: {energy}%"
+            f"انرژی: {energy}%\n"
+            f"قدرت حمله: {attack_power}%\n"
+            f"قدرت دفاع: {defense_power}%"
         )
         
         keyboard = [
@@ -385,84 +454,45 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         requester_cannons = requester_data.get("cannons", 0)
         requester_energy = requester_data.get("energy", 100)
+        requester_attack_power = requester_data.get("attack_power", 50)
+        requester_defense_power = requester_data.get("defense_power", 50)
+        
         target_cannons = target_data.get("cannons", 0)
         target_energy = target_data.get("energy", 100)
+        target_attack_power = target_data.get("attack_power", 50)
+        target_defense_power = target_data.get("defense_power", 50)
         
-        requester_chance = min(100, (requester_cannons * 20) + (requester_energy / 2))
-        target_chance = min(100, (target_cannons * 20) + (target_energy / 2))
+        requester_win_chance = (requester_cannons * 15) + (requester_energy / 2) + (requester_attack_power * 0.4) - (target_defense_power * 0.3)
+        target_win_chance = (target_cannons * 15) + (target_energy / 2) + (target_attack_power * 0.4) - (requester_defense_power * 0.3)
         
-        win = random.random() * (requester_chance + target_chance) < requester_chance
+        win = random.random() * (requester_win_chance + target_win_chance) < requester_win_chance
         
         requester_data["games"] = requester_data.get("games", 0) + 1
         target_data["games"] = target_data.get("games", 0) + 1
-        requester_data["energy"] = max(0, requester_data.get("energy", 100) - 5)
-        target_data["energy"] = max(0, target_data.get("energy", 100) - 5)
         
         requester_report = f"بازی دوستانه با {target_name}:\n"
         target_report = f"بازی دوستانه با {requester_name}:\n"
         
         if win:
-            requester_data["wins"] = requester_data.get("wins", 0) + 1
-            requester_data["score"] = requester_data.get("score", 0) + 30
-            requester_data["gold"] = requester_data.get("gold", 10) + 3
-            requester_data["silver"] = requester_data.get("silver", 15) + 5
-            requester_data["energy"] = min(100, requester_data["energy"] + 10)
             requester_report += "کاپیتان، دشمن رو غرق کردیم! 🏆"
-            if random.random() < 0.25:
-                requester_data["gems"] = requester_data.get("gems", 5) + 1
-                requester_report += "\nیه جم پیدا کردیم! 💎"
-            requester_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
-            
-            target_data["score"] = max(0, target_data.get("score", 0) - 10)
-            if target_data.get("gold", 10) >= 3:
-                target_data["gold"] -= 3
-            if target_data.get("silver", 15) >= 5:
-                target_data["silver"] -= 5
-            if random.random() < 0.25 and target_data.get("gems", 5) >= 1:
-                target_data["gems"] -= 1
-                target_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم!"
-            else:
-                target_report += "کاپیتان، کشتیمون سوراخ شد!"
-            target_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
-            target_data["energy"] = max(0, target_data["energy"] - 30)
+            target_report += "کاپیتان، کشتیمون سوراخ شد! 😢"
         else:
-            target_data["wins"] = target_data.get("wins", 0) + 1
-            target_data["score"] = target_data.get("score", 0) + 30
-            target_data["gold"] = target_data.get("gold", 10) + 3
-            target_data["silver"] = target_data.get("silver", 15) + 5
-            target_data["energy"] = min(100, target_data["energy"] + 10)
+            requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢"
             target_report += "کاپیتان، دشمن رو غرق کردیم! 🏆"
-            if random.random() < 0.25:
-                target_data["gems"] = target_data.get("gems", 5) + 1
-                target_report += "\nیه جم پیدا کردیم! 💎"
-            target_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
-            
-            requester_data["score"] = max(0, requester_data.get("score", 0) - 10)
-            if requester_data.get("gold", 10) >= 3:
-                requester_data["gold"] -= 3
-            if requester_data.get("silver", 15) >= 5:
-                requester_data["silver"] -= 5
-            if random.random() < 0.25 and requester_data.get("gems", 5) >= 1:
-                requester_data["gems"] -= 1
-                requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم!"
-            else:
-                requester_report += "کاپیتان، کشتیمون سوراخ شد!"
-            requester_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
-            requester_data["energy"] = max(0, requester_data["energy"] - 30)
         
         # ارسال گزارش بازی
         messages = [
             "🏴‍☠️ نبرد دوستانه آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن!",
             "🌊 طوفان در راهه! دریا داره خشمگین می‌شه!",
             f"⚡ جنگجوهات با انرژی {requester_energy}% دارن عرشه رو آماده می‌کنن!",
-            "🔥 دشمن با پرچم سیاه در دیدرسه! آماده شلیک!",
-            "⛵️ بادبان‌ها بالاست! حالا وقت حمله‌ست، کاپیتان!"
+            f"⚔️ قدرت حمله {requester_name}: {requester_attack_power}% - قدرت دفاع {target_name}: {target_defense_power}%",
+            f"⚔️ قدرت حمله {target_name}: {target_attack_power}% - قدرت دفاع {requester_name}: {requester_defense_power}%"
         ]
         for i in range(requester_cannons):
-            hit = random.random() < 0.5
+            hit = random.random() < (requester_attack_power / 100)
             messages.append(f"☄️ شلیک توپ {i+1} از {requester_name}! {'برخورد کرد!' if hit else 'خطا رفت!'}")
         for i in range(target_cannons):
-            hit = random.random() < 0.5
+            hit = random.random() < (target_attack_power / 100)
             messages.append(f"☄️ شلیک توپ {i+1} از {target_name}! {'برخورد کرد!' if hit else 'خطا رفت!'}")
         
         num_reports = random.randint(5, 10)
@@ -485,7 +515,7 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("۲۵ جم = ۵ ترون", callback_data="buy_25_gems")],
         [InlineKeyboardButton("۵۰ جم = ۸ ترون", callback_data="buy_50_gems")],
-        [InlineKeyboardButton("۱۰۰ جم = ۱۴ ترون", callback_data="buy_100_gems")],
+        [InlineKeyboardButton("۱۰۰ جم = ۱۴ ترون", callback_data="buy_100_gems")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -503,6 +533,8 @@ async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wins = user_data.get("wins", 0)
     games = user_data.get("games", 0)
     energy = user_data.get("energy", 100)
+    attack_power = user_data.get("attack_power", 50)
+    defense_power = user_data.get("defense_power", 50)
     
     win_rate = (wins / games * 100) if games > 0 else 0
     text = (
@@ -511,7 +543,9 @@ async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"کیسه طلا: {gold}\n"
         f"شمش نقره: {silver}\n"
         f"میانگین پیروزی: {win_rate:.1f}%\n"
-        f"انرژی: {energy}%"
+        f"انرژی: {energy}%\n"
+        f"قدرت حمله: {attack_power}%\n"
+        f"قدرت دفاع: {defense_power}%"
     )
     await update.message.reply_text(text)
 
@@ -590,13 +624,14 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
             photo=update.message.photo[-1].file_id,
-            caption=f"فیش پرداخت از کاربر {user_id} برای {pending_gems} جم",
+            caption=f"فیش پرداخت از کاربر {user_id} برای {pending_gems} جمل",
             reply_markup=reply_markup
         )
     elif update.message.text:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"فیش متنی از کاربر {user_id} برای {pending_gems} جم:\n{update.message.text}",
+            text=f"فیش متنی از کاربر {user_id} برای {pending_gems} جمل:
+            f"{update.message.text}",
             reply_markup=reply_markup
         )
     
@@ -621,7 +656,8 @@ async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = int(user_id)
         context.bot_data["user_data"][user_id]["pending_gems"] = 0
         await context.bot.send_message(user_id, "خرید شما رد شد. لطفاً دوباره تلاش کنید!")
-        await query.message.edit_reply_markup(reply_markup=None)
+        await query.message.edit_reply_markup(reply_id)
+
     save_data(context)
 
 # 📌 هندلر برای خرید خوراکی
@@ -665,8 +701,10 @@ application.add_handler(MessageHandler(filters.Regex("📕 اطلاعات کشت
 application.add_handler(MessageHandler(filters.Regex("⚡️ انرژی جنگجویان"), warriors_energy))
 application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی"), start_game))
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
-application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGE, handle_username))
+application.add_handler(MessageHandler(filters.Regex("^(دریانانوردی ⛵️|توپ ☄️|استراتژی 🧠|بازگشت به منو 🔙)$"), handle_game_options))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانانوردی ⛵️|توپ ☄️|استراتژی 🧠|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGES, handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانانوردی ⛵️|توپ ☄️|استراتژی 🧠|بازگشت به منو 🔙)$") & filters.UpdateType.MESSAGES, handle_strategy_input))
+application.add_handler(CallbackQueryHandler(handle_strategy_choice, pattern="strategy_(attack|defense)"))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
