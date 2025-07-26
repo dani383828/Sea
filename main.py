@@ -748,7 +748,7 @@ async def on_startup():
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
+    
 
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
