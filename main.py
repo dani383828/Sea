@@ -32,7 +32,6 @@ application = Application.builder().token(TOKEN).build()
 def save_data(context: ContextTypes.DEFAULT_TYPE):
     data = {
         "usernames": context.bot_data.get("usernames", {}),
-        "active_players": context.bot_data.get("active_players", {}),
         "user_data": {str(user_id): data for user_id, data in context.bot_data.get("user_data", {}).items()}
     }
     with open(DATA_FILE, "w") as f:
@@ -44,12 +43,10 @@ def load_data(context: ContextTypes.DEFAULT_TYPE):
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
             context.bot_data["usernames"] = data.get("usernames", {})
-            context.bot_data["active_players"] = data.get("active_players", {})
             context.bot_data["user_data"] = {int(user_id): data for user_id, data in data.get("user_data", {}).items()}
 
 # 📌 هندلر برای /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    load_data(context)  # بارگذاری داده‌ها
     user_id = update.message.from_user.id
     if not context.bot_data.get("user_data"):
         context.bot_data["user_data"] = {}
@@ -61,7 +58,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     context.bot_data["user_data"][user_id]["state"] = None
-    context.bot_data["active_players"][user_id] = datetime.now()  # ثبت کاربر به‌عنوان آنلاین
     if not context.bot_data["user_data"][user_id].get("initialized"):
         context.bot_data["user_data"][user_id].update({
             "username": context.bot_data.get("usernames", {}).get(user_id, f"دزد دریایی {user_id}"),
@@ -81,11 +77,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان", "🔍 جست و جوی کاربران"],
-        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
+        ["📕 اطلاعات کشتی", "⚡️انرژی جنگجویان"],
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
-        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {context.bot_data['user_data'][user_id]['username']}!",
+        f"🏴‍☠ خوش اومدی به دنیای دزدان دریایی، {context.bot_data['user_data'][user_id]['username']}!",
         reply_markup=reply_markup
     )
     save_data(context)
@@ -111,20 +107,19 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data["user_data"][user_id]["username"] = username
     context.bot_data["user_data"][user_id]["state"] = None
     context.bot_data["usernames"][user_id] = username
-    context.bot_data["active_players"][user_id] = datetime.now()
     await start(update, context)
+    save_data(context)
 
 # 📌 هندلر برای جست‌وجوی کاربران
 async def search_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = "waiting_for_search"
     await update.message.reply_text("لطفاً آیدی عددی یا نام کاربری دوستت رو وارد کن:")
+    context.bot_data["user_data"][update.message.from_user.id]["state"] = "waiting_for_search"
     save_data(context)
 
 # 📌 هندلر برای پردازش جست‌وجو
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "waiting_for_search":
+    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "state"waiting_for_search":
         return
     
     search_query = update.message.text.strip()
@@ -154,13 +149,13 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     keyboard = [
-        [InlineKeyboardButton("جنگ دوستانه ⚔️", callback_data=f"accept_game_{user_id}")],
+        [InlineKeyboardButton("قبول ✅", callback_data=f"accept_game_{user_id}")],
         [InlineKeyboardButton("رد ❌", callback_data="reject_game")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         target_id,
-        f"کاربر {context.bot_data['user_data'][user_id]['username']} ({user_id}) بهت درخواست بازی دوستانه داده!",
+        f"کاربر {context.bot_data['user_data'][user_id]['username']} ({user_id}) بهت درخواست بازی دوستانه داده!"),
         reply_markup=reply_markup
     )
     await update.message.reply_text("درخواست بازی ارسال شد! منتظر جواب باش.")
@@ -191,6 +186,7 @@ async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"{i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n"
     
     await update.message.reply_text(text)
+    save_data(context)
 
 # 📌 هندلر برای شروع بازی
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -214,87 +210,66 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int):
     user_id = update.message.from_user.id
     await update.message.reply_text("در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)")
+    await asyncio.sleep(60)  # صبر ۶۰ ثانیه برای مچ‌میکینگ
     
-    # بررسی بازیکنان آنلاین
-    active_players = context.bot_data.get("active_players", {})
-    online_players = [
-        pid for pid, last_seen in active_players.items()
-        if pid != user_id and (datetime.now() - last_seen).total_seconds() < 300
-    ]
-    
-    opponent_id = None
-    if online_players:
-        opponent_id = random.choice(online_players)
-        opponent_name = context.bot_data["user_data"][opponent_id]["username"]
-        opponent_cannons = context.bot_data["user_data"][opponent_id]["cannons"]
-        opponent_energy = context.bot_data["user_data"][opponent_id]["energy"]
+    opponent_id = None  # سیستم مچ‌میکینگ واقعی باید اینجا باشه
+    if not opponent_id:
+        opponent_name = "دزد دریایی ناشناس"
     else:
-        opponent_name = f"دزد دریایی ناشناس {random.randint(1000, 9999)}"
-        opponent_cannons = random.randint(0, 3)
-        opponent_energy = random.randint(50, 100)
+        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
     
-    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, opponent_energy, opponent_id)
+    opponent_cannons = random.randint(0, 3)  # تعداد توپ حریف فیک
+    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons)
     save_data(context)
 
 # 📌 تابع برای ارسال گزارش‌های بازی
-async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int, opponent_energy: int, opponent_id=None):
+async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int):
     user_id = update.message.from_user.id
     messages = [
-        f"🏴‍☠️ نبرد با {opponent_name} آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن!",
-        f"🌊 طوفان داره دریا رو به هم می‌ریزه! آماده باش، کاپیتان {context.bot_data['user_data'][user_id]['username']}!",
-        f"⚡ جنگجوهات با {energy}% انرژی دارن عرشه رو آماده می‌کنن!",
-        f"🔥 دشمن با پرچم سیاه و {opponent_energy}% انرژی در دیدرسه!",
-        f"⛵️ بادبان‌ها بالاست! وقت حمله به {opponent_name} رسیده!",
-        f"🏹 خدمه دارن توپ‌ها رو پر می‌کنن! منتظر دستورت هستیم!",
-        f"💥 انفجار در افق! {opponent_name} داره آماده شلیک می‌شه!",
-        f"🌪️ گردباد دریا رو متلاطم کرده! تمرکز کن، کاپیتان!",
-        f"⚔️ شمشیرها تیز، جنگجوهات آماده‌ان! به سوی {opponent_name}!",
-        f"🛡️ {opponent_name} سپرش رو بالا برده! باید نقطه‌ضعفش رو پیدا کنیم!",
-        f"🌌 ستاره‌ها امشب شاهد نبرد حماسی تو با {opponent_name} هستن!",
-        f"🔦 فانوس کشتی {opponent_name} روشن شد! دارن به ما نزدیک می‌شن!",
-        f"🦜 طوطی روی دکل فریاد می‌زنه: {opponent_name} در تیررسه!",
-        f"🪝 قلاب‌های {opponent_name} آماده‌ان! مراقب باشن به کشتیمون نچسبن!",
-        f"🌬️ باد به نفع ماست! حالا وقت شلیک به {opponent_name}!",
-        f"🧨 باروت‌ها آماده‌ان! فقط یه جرقه کافیه برای نابودی {opponent_name}!",
-        f"🛠️ خدمه دارن عرشه رو تعمیر می‌کنن، ولی {opponent_name} نزدیکه!",
-        f"🔍 {opponent_name} تو مه غلیظ پنهان شده! چشماتو تیز کن!",
-        f"🔔 زنگ خطر به صدا دراومد! همه به پست‌هاشون برای نبرد با {opponent_name}!",
-        f"🌑 ماه امشب پشت ابره، {opponent_name} داره یواشکی نزدیک می‌شه!",
-        f"🦑 یه موجود عظیم زیر آب دیده شده! باید مراقب باشیم!",
-        f"🔥 دود از کشتی {opponent_name} بلند شد! انگار دارن آماده حمله می‌شن!",
-        f"⚡ رعد و برق آسمان رو شکافت! وقتشه ضربه بزنیم به {opponent_name}!",
-        f"🛶 قایق‌های {opponent_name} دارن بهمون نزدیک می‌شن! آماده دفاع!",
-        f"🪓 تبرهای جنگجوهات تیز شدن! وقتشه {opponent_name} رو خرد کنیم!",
-        f"🌊 یه موج عظیم کشتی رو تکون داد! باید تعادل رو حفظ کنیم!",
-        f"🔫 تفنگ‌های {opponent_name} آماده‌ان! باید سریع عمل کنیم!",
-        f"🧙‍♂️ جادوی دریا امشب عجیبه! انگار به نفع ماست در برابر {opponent_name}!",
-        f"🛑 {opponent_name} یه تله گذاشته! باید دورش بزنیم!",
-        f"🌬️ باد یه دفعه عوض شد! حالا {opponent_name} تو موقعیت بهتریه!",
-        f"🦈 کوسه‌ها دور کشتی {opponent_name} جمع شدن! شاید به نفع ماست!",
-        f"🪘 طبل‌های جنگ به صدا دراومد! وقت نبرد با {opponent_name}!"
+        "🏴‍☠️ نبرد آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن!",
+        "🌊 طوفان در راهه! دریا داره خشمگین می‌شه!",
+        f"⚡ جنگجوهات با انرژی {energy}% دارن عرشه رو آماده می‌کنن!",
+        "🔥 دشمن با پرچم سیاه در دیدرسه! آماده شلیک!",
+        "⛵️ بادبان‌ها بالاست! حالا وقت حمله‌ست، کاپیتان!",
+        "🏹 خدمه دارن توپ‌ها رو پر می‌کنن! منتظر دستورت هستیم!",
+        "💥 انفجار در افق! دشمن داره آماده می‌شه!",
+        "🌪️ گردباد دریا رو به هم ریخته! باید تمرکز کنیم!",
+        "⚔️ شمشیرها تیز، جنگجوهات آماده‌ان! به پیش!",
+        "🛡️ دشمن سپرش رو بالا برده! باید نقطه‌ضعفش رو پیدا کنیم!",
+        "🌌 ستاره‌ها امشب شاهد یه نبرد حماسی‌ان!",
+        "🔦 فانوس کشتی دشمن روشن شد! دارن به ما نزدیک می‌شن!",
+        "🦜 طوطی روی دکل فریاد می‌زنه: دشمن در تیررسه!",
+        "🪝 قلاب‌های دشمن آماده‌ان! مراقب باشن به کشتیمون نچسبن!",
+        "🌬️ باد به نفع ماست! حالا وقت شلیکه، کاپیتان!",
+        "🧨 باروت‌ها آماده‌ان! فقط یه جرقه کافیه!",
+        "🛠️ خدمه دارن عرشه رو تعمیر می‌کنن، ولی دشمن نزدیکه!",
+        "🔍 دشمن تو مه غلیظ پنهان شده! چشماتو تیز کن!",
+        "🔔 زنگ خطر به صدا دراومد! همه به پست‌هاشون!",
+        "🌑 ماه امشب پشت ابره، دشمن داره یواشکی نزدیک می‌شه!",
+        "🦑 یه موجود عظیم زیر آب دیده شده! دریا امشب خطرناکه!",
+        "🔥 دود از کشتی دشمن بلند شد! انگار دارن آماده می‌شن!",
+        "⚡ رعد و برق آسمان رو شکافت! وقتشه ضربه بزنیم!",
+        "🛶 قایق‌های دشمن دارن بهمون نزدیک می‌شن! آماده دفاع!",
+        "🪓 تبرهای جنگجوهات تیز شدن! وقتشه دشمن رو خرد کنیم!",
+        "🌊 یه موج عظیم کشتی رو تکون داد! باید تعادل رو حفظ کنیم!",
+        "🔫 تفنگ‌های دشمن آماده‌ان! باید سریع عمل کنیم!",
+        "🧙‍♂️ جادوی دریا امشب عجیبه! انگار به نفع ماست!",
+        "🛑 دشمن یه تله گذاشته! باید دورش بزنیم!",
+        "🌬️ باد یه دفعه عوض شد! حالا دشمن تو موقعیت بهتریه!",
+        "🦈 کوسه‌ها دور کشتی دشمن جمع شدن! شاید به نفع ماست!",
+        "🪘 طبل‌های جنگ به صدا دراومد! وقت نبرده، کاپیتان!"
     ]
     
-    # گزارش شلیک‌های بازیکن
     for i in range(cannons):
         hit = random.random() < 0.5
-        messages.append(
-            f"☄️ تو توپ {i+1} رو شلیک کردی! "
-            f"{'برخورد کرد و عرشه {opponent_name} ترکید! 💥' if hit else 'تو آب افتاد، خطا رفت! 🌊'}"
-        )
-    
-    # گزارش شلیک‌های حریف
+        messages.append(f"☄️ شلیک توپ {i+1} از ما! {'برخورد کرد و عرشه دشمن ترکید!' if hit else 'تو آب افتاد، خطا رفت!'}")
     for i in range(opponent_cannons):
         hit = random.random() < 0.5
-        messages.append(
-            f"☄️ {opponent_name} توپ {i+1} رو شلیک کرد! "
-            f"{'برخورد کرد و دکلمون لرزید! 😱' if hit else 'کنار کشتی افتاد، شانس آوردیم! 🌊'}"
-        )
+        messages.append(f"☄️ دشمن توپ {i+1} شلیک کرد! {'برخورد کرد و دکلمون لرزید!' if hit else 'کنار کشتی افتاد، شانس آوردیم!'}")
     
-    # انتخاب رندوم ۸ تا ۲۵ پیام
-    num_reports = random.randint(8, 25)
+    num_reports = random.randint(6, 20)
     selected_messages = random.sample(messages, min(num_reports, len(messages)))
     
-    # ارسال گزارش‌ها در ۶۰ ثانیه
     total_duration = 60
     interval = total_duration / len(selected_messages)
     
@@ -302,14 +277,11 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(msg)
         await asyncio.sleep(interval)
     
-    # محاسبه شانس پیروزی
     win_chance = min(100, (cannons * 20) + (energy / 2))
-    opponent_chance = min(100, (opponent_cannons * 20) + (opponent_energy / 2))
-    win = random.random() * (win_chance + opponent_chance) < win_chance
+    opponent_chance = random.uniform(20, 80)
+    win = random.random() * 100 < win_chance
     
-    # گزارش نهایی
-    report = f"نبرد با {opponent_name}:\n"
-    report += "کاپیتان، کشتیمون سوراخ شد! 😢" if not win else "کاپیتان، دشمن رو غرق کردیم! 🏆"
+    report = "کاپیتان، کشتیمون سوراخ شد!" if not win else "کاپیتان، دشمن رو غرق کردیم!"
     context.bot_data["user_data"][user_id]["games"] += 1
     context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 5)
     
@@ -332,41 +304,10 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         if random.random() < 0.25 and context.bot_data["user_data"][user_id]["gems"] >= 1:
             context.bot_data["user_data"][user_id]["gems"] -= 1
             report += "\nیه جم از دست دادیم! 😢"
-        report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
         context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 30)
+        report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
     
-    await update.message.reply_text(report)
-    
-    # به‌روزرسانی داده‌های حریف واقعی
-    if opponent_id:
-        context.bot_data["user_data"][opponent_id]["games"] += 1
-        context.bot_data["user_data"][opponent_id]["energy"] = max(0, context.bot_data["user_data"][opponent_id]["energy"] - 5)
-        if not win:
-            context.bot_data["user_data"][opponent_id]["wins"] += 1
-            context.bot_data["user_data"][opponent_id]["score"] += 30
-            context.bot_data["user_data"][opponent_id]["gold"] += 3
-            context.bot_data["user_data"][opponent_id]["silver"] += 5
-            context.bot_data["user_data"][opponent_id]["energy"] = min(100, context.bot_data["user_data"][opponent_id]["energy"] + 10)
-            opponent_report = f"نبرد با {context.bot_data['user_data'][user_id]['username']}:\nکاپیتان، دشمن رو غرق کردیم! 🏆"
-            if random.random() < 0.25:
-                context.bot_data["user_data"][opponent_id]["gems"] += 1
-                opponent_report += "\nیه جم پیدا کردیم! 💎"
-            opponent_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
-        else:
-            context.bot_data["user_data"][opponent_id]["score"] = max(0, context.bot_data["user_data"][opponent_id]["score"] - 10)
-            if context.bot_data["user_data"][opponent_id]["gold"] >= 3:
-                context.bot_data["user_data"][opponent_id]["gold"] -= 3
-            if context.bot_data["user_data"][opponent_id]["silver"] >= 5:
-                context.bot_data["user_data"][opponent_id]["silver"] -= 5
-            if random.random() < 0.25 and context.bot_data["user_data"][opponent_id]["gems"] >= 1:
-                context.bot_data["user_data"][opponent_id]["gems"] -= 1
-                opponent_report = f"نبرد با {context.bot_data['user_data'][user_id]['username']}:\nکاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم! 😢"
-            else:
-                opponent_report = f"نبرد با {context.bot_data['user_data'][user_id]['username']}:\nکاپیتان، کشتیمون سوراخ شد! 😢"
-            opponent_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
-            context.bot_data["user_data"][opponent_id]["energy"] = max(0, context.bot_data["user_data"][opponent_id]["energy"] - 30)
-        await context.bot.send_message(opponent_id, opponent_report)
-    
+    await update.message.reply_text(f"بازی با {opponent_name}:\n{report}")
     save_data(context)
 
 # 📌 هندلر برای پردازش بازی و خرید توپ
@@ -409,7 +350,7 @@ async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_T
             context.bot_data["user_data"][user_id]["cannons"] += 1
             await query.message.reply_text("یه توپ با ۱ جم خریدی!")
         else:
-            await query.message.reply_text("جم کافی نداری!")
+            await query.message.reply_textجم کافی نداری!")
     elif query.data == "buy_cannon_gold":
         if context.bot_data["user_data"][user_id]["gold"] >= 5:
             context.bot_data["user_data"][user_id]["gold"] -= 5
@@ -433,20 +374,22 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     if query.data.startswith("accept_game_"):
         requester_id = int(query.data.split("_")[2])
-        requester_name = context.bot_data["user_data"][requester_id]["username"]
+        requester_name = context.bot_data["usernames"].get(requester_id, "ناشناس")
+        player_id = query.from_user.id
         
-        requester_cannons = context.bot_data["user_data"][requester_id]["cannons"]
-        requester_energy = context.bot_data["user_data"][requester_id]["energy"]
-        player_cannons = context.bot_data["user_data"][user_id]["cannons"]
-        player_energy = context.bot_data["user_data"][user_id]["energy"]
+        requester_data = context.bot_data["user_data"].get(requester_id, {})
+        requester_cannons = requester_data.get("cannons", 0)
+        requester_energy = requester_data.get("energy", 100)
+        player_cannons = context.bot_data["user_data"][user_id].get("cannons", 0)
+        player_energy = context.bot_data["user_data"][user_id].get("energy", 100)
         
         requester_chance = min(100, (requester_cannons * 20) + (requester_energy / 2))
         player_chance = min(100, (player_cannons * 20) + (player_energy / 2))
         
         win = random.random() * (requester_chance + player_chance) < requester_chance
         
-        context.bot_data["user_data"][requester_id]["games"] += 1
-        context.bot_data["user_data"][requester_id]["energy"] = max(0, context.bot_data["user_data"][requester_id]["energy"] - 5)
+        requester_data["games"] = requester_data.get("games", 0) + 1
+        requester_data["energy"] = max(0, requester_data.get("energy", 100) - 5)
         context.bot_data["user_data"][user_id]["games"] += 1
         context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 5)
         
@@ -454,14 +397,14 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         player_report = f"بازی دوستانه با {requester_name}:\n"
         
         if win:
-            context.bot_data["user_data"][requester_id]["wins"] += 1
-            context.bot_data["user_data"][requester_id]["score"] += 30
-            context.bot_data["user_data"][requester_id]["gold"] += 3
-            context.bot_data["user_data"][requester_id]["silver"] += 5
-            context.bot_data["user_data"][requester_id]["energy"] = min(100, context.bot_data["user_data"][requester_id]["energy"] + 10)
+            requester_data["wins"] += 1
+            requester_data["score"] += 30
+            requester_data["gold"] += 3
+            requester_data["silver"] += 5
+            requester_data["energy"] = min(100, requester_data["energy"] + 10)
             requester_report += "کاپیتان، دشمن رو غرق کردیم! 🏆"
             if random.random() < 0.25:
-                context.bot_data["user_data"][requester_id]["gems"] += 1
+                requester_data["gems"] += 1
                 requester_report += "\nیه جم پیدا کردیم! 💎"
             requester_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
             
@@ -474,7 +417,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 context.bot_data["user_data"][user_id]["gems"] -= 1
                 player_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم! 😢"
             else:
-                player_report += "کاپیتان، کشتیمون سوراخ شد! 😢"
+                player_report += "کاپیتان، کشتیمون سوراخ شد!"
             player_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
             context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 30)
         else:
@@ -487,20 +430,20 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if random.random() < 0.25:
                 context.bot_data["user_data"][user_id]["gems"] += 1
                 player_report += "\nیه جم پیدا کردیم! 💎"
-            player_report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
+            player_report += "\n\جایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
             
-            context.bot_data["user_data"][requester_id]["score"] = max(0, context.bot_data["user_data"][requester_id]["score"] - 10)
-            if context.bot_data["user_data"][requester_id]["gold"] >= 3:
-                context.bot_data["user_data"][requester_id]["gold"] -= 3
-            if context.bot_data["user_data"][requester_id]["silver"] >= 5:
-                context.bot_data["user_data"][requester_id]["silver"] -= 5
-            if random.random() < 0.25 and context.bot_data["user_data"][requester_id]["gems"] >= 1:
-                context.bot_data["user_data"][requester_id]["gems"] -= 1
+            requester_data["score"] = max(0, requester_data.get("score", 0) + 10
+            if requester_data.get("gold", 10) 3:
+                requester_data["gold"] -= 3
+            if requester_data.get("silver", 15) >= 5:
+                requester_data["silver"] -= 5
+            if random.random() < 0.25 and requester_data.get("gems", 5) >= 1:
+                requester_data["gems"] -= 1
                 requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢\nیه جم از دست دادیم! 😢"
             else:
                 requester_report += "کاپیتان، کشتیمون سوراخ شد! 😢"
-            requester_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳۰٪ انرژی"
-            context.bot_data["user_data"][requester_id]["energy"] = max(0, context.bot_data["user_data"][requester_id]["energy"] - 30)
+            requester_report += "\nجریمه: -۱۰ امتیاز، -۳ کیسه طلا، -۵ شمش نقره، -۳-۳۰٪ انرژی"
+            requester_data["energy"] = max(0, requester_data["energy"] - 30)
         
         await context.bot.send_message(requester_id, requester_report)
         await query.message.reply_text(player_report)
@@ -538,7 +481,7 @@ async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"جم: {gems}\n"
         f"کیسه طلا: {gold}\n"
         f"شمش نقره: {silver}\n"
-        f"میانگین پیروزی: {win_rate:.0f}%\n"
+        f"میانگین پیروزی: {win_rate:.1f}%\n"
         f"انرژی: {energy}%"
     )
     await update.message.reply_text(text)
@@ -546,9 +489,10 @@ async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای انرژی جنگجویان
 async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    energy = context.bot_data["user_data"][user_id]["energy"]
+    user_data = context.bot_data["user_data"][user_id]
+    energy = user_data.get("energy", 100)
     now = datetime.now()
-    last_purchase = context.bot_data["user_data"][user_id]["last_purchase"]
+    last_purchase = user_data.get("last_purchase", {})
     
     available_items = []
     items = [
@@ -567,7 +511,7 @@ async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     reply_markup = InlineKeyboardMarkup(available_items) if available_items else None
-    text = f"⚡️ انرژی جنگجویان: {energy}%\n"
+    text = f"⚡️انرژی جنگجویان: {energy}%\n"
     if energy < 100:
         text += "اگه جنگجویانت خستن، باید براشون خوراکی بخری!"
     else:
@@ -595,14 +539,14 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data["user_data"][user_id]["pending_gems"] = gems
         await query.message.reply_text(
             f"لطفاً {tron} ترون به آدرس زیر ارسال کنید و فیش پرداخت رو بفرستید:\n"
-            "TJ4xrwKJzKjk6FgKfuuqwah3Az5Ur22kJb"
+            "TJ4xrwKJzKjk6FgKfVqRw8h3Qz5Ur22kLkb"
         )
-        save_data(context)
+    save_data(context)
 
 # 📌 هندلر برای دریافت فیش
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    pending_gems = context.bot_data["user_data"][user_id]["pending_gems"]
+    pending_gems = context.bot_data["user_data"][user_id].get("pending_gems", 0)
     if pending_gems == 0:
         await update.message.reply_text("هیچ خریدی در انتظار تأیید نیست!")
         return
@@ -611,7 +555,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("تأیید ✅", callback_data=f"confirm_{user_id}_{pending_gems}")],
         [InlineKeyboardButton("رد ❌", callback_data=f"reject_{user_id}")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard)
     
     if update.message.photo:
         await context.bot.send_photo(
@@ -627,12 +571,13 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
     
-    await update.message.reply_text("فیش شما به ادمین ارسال شد. منتظر تأیید باشید!")
+    await update.message.reply_text("فیش شما به ادمین ارسال شد! منتظر تأیید باشید!")
     save_data(context)
 
 # 📌 هندلر برای تأیید/رد فیش توسط ادمین
 async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
     await query.answer()
     
     data = query.data
@@ -641,7 +586,7 @@ async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TY
         user_id, gems = int(user_id), int(gems)
         context.bot_data["user_data"][user_id]["gems"] += gems
         context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, f"خرید شما تأیید شد! {gems} جم به حسابتون اضافه شد.")
+        await context.bot.send_message(user_id, f"خرید شما تأیید شد! {gems} جم به حسابت اضافه شد.")
         await query.message.edit_reply_markup(reply_markup=None)
     elif data.startswith("reject_"):
         _, user_id = data.split("_")
@@ -683,7 +628,7 @@ async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.message.reply_text("کیسه طلا یا شمش نقره کافی نیست!")
         await query.message.delete()
         await warriors_energy(update, context)
-        save_data(context)
+    save_data(context)
 
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
@@ -694,10 +639,10 @@ application.add_handler(MessageHandler(filters.Regex("⚔️ شروع بازی")
 application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین ناخدایان"), top_captains))
 application.add_handler(MessageHandler(filters.Regex("🔍 جست و جوی کاربران"), search_users))
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_username))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)"), handle_search))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🔍|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙)$"), handle_search))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
+application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)$"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="(accept_game|reject_game)_.*"))
@@ -714,7 +659,7 @@ async def telegram_webhook(request: Request):
 # 🔥 زمان بالا آمدن سرور
 @app.on_event("startup")
 async def on_startup():
-    load_data(application)  # بارگذاری داده‌ها
+    load_data(application)
     await application.bot.set_webhook(url=WEBHOOK_URL)
     print("✅ Webhook set:", WEBHOOK_URL)
     await application.initialize()
@@ -724,7 +669,7 @@ async def on_startup():
 # 🛑 هنگام خاموشی
 @app.on_event("shutdown")
 async def on_shutdown():
-    save_data(application)  # ذخیره داده‌ها قبل از خاموشی
+    save_data(application)
     await application.updater.stop()
     await application.stop()
     await application.shutdown()
