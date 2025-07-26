@@ -671,7 +671,7 @@ async def handle_shop_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("۲۵ جم = ۵ ترون", callback_data="buy_25_gems")],
             [InlineKeyboardButton("۵۰ جم = ۸ ترون", callback_data="buy_50_gems")],
             [InlineKeyboardButton("۱۰۰ جم = ۱۴ ترون", callback_data="buy_100_gems")],
-            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_shop")]
+            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -684,7 +684,7 @@ async def handle_shop_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("۳ توپ = ۷ جم", callback_data="buy_3_cannons")],
             [InlineKeyboardButton("۱۰ توپ = ۱۸ جم", callback_data="buy_10_cannons")],
             [InlineKeyboardButton("۲۰ توپ = ۳۰ جم", callback_data="buy_20_cannons")],
-            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_shop")]
+            [InlineKeyboardButton("بازگشت 🔙", callback_data="back_to_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -754,8 +754,8 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("☄️ 💎 ۲۰ توپ با ۳۰ جم خریداری شد!")
         else:
             await query.message.reply_text("⛔ 💎 جم کافی نیست!")
-    elif data == "back_to_shop":
-        await shop(update, context)
+    elif data == "back_to_menu":
+        await back_to_menu(update, context)
 
     await query.message.delete()
     save_data(context)
@@ -924,12 +924,11 @@ application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵�
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
 application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
-application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
+application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems|buy_(1|3|10|20)_cannons"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu)_.*"))
-application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_(1|3|10|20)_cannons"))
 application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$"), handle_shop_purchase))
 
 # 🔁 وب‌هوک تلگرام
