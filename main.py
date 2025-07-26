@@ -15,11 +15,12 @@ from telegram.ext import (
 )
 from datetime import datetime, timedelta
 
-TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3h3Az5Ur4kI"
+# توکن از متغیر محیطی گرفته می‌شه
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3h3Az5Ur4kI")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
 ADMIN_ID = 5542927340  # آیدی عددی ادمین
-DATA_FILE = os.environ.get("DATA_FILE", "game_data.json")  # فال‌بک به فایل محلی اگه دیسک پایدار تنظیم نشده
+DATA_FILE = os.environ.get("DATA_FILE", "game_data.json")  # فال‌بک به فایل محلی
 
 # ⚙️ لاگ‌گیری
 logging.basicConfig(
@@ -852,11 +853,14 @@ async def telegram_webhook(request: Request):
 async def on_startup():
     try:
         load_data(application)
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-        logger.info(f"Webhook set: {WEBHOOK_URL}")
+        try:
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook set successfully: {WEBHOOK_URL}")
+        except Exception as e:
+            logger.warning(f"Failed to set webhook: {e}. Falling back to polling.")
+            await application.updater.start_polling(poll_interval=1.0, timeout=10)
         await application.initialize()
         await application.start()
-        
         logger.info("Application started successfully")
     except Exception as e:
         logger.error(f"Startup error: {e}")
@@ -876,4 +880,4 @@ async def on_shutdown():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
