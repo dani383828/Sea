@@ -81,8 +81,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
         ["🏴‍☠️ برترین ناخدایان"],
-        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"],
-        ["≡ منو"]  # دکمه همبرگری اضافه شده
+        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
@@ -350,7 +349,7 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             report += "\nیه جم پیدا کردیم! 💎"
         report += "\nجایزه: ۳۰ امتیاز، ۳ کیسه طلا، ۵ شمش نقره، +۱۰٪ انرژی"
     else:
-        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_id"]["score"] - 10)
+        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_data"][user_id]["score"] - 10)
         if context.bot_data["user_data"][user_id]["gold"] >= 3:
             context.bot_data["user_data"][user_id]["gold"] -= 3
         if context.bot_data["user_data"][user_id]["silver"] >= 5:
@@ -766,7 +765,7 @@ application.add_handler(MessageHandler(filters.Regex("🏴‍☠️ برترین
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
 application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|≡ منو|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
