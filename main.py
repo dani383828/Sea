@@ -75,7 +75,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "initialized": True,
             "attack_strategy": 50,  # Default attack strategy (50%)
             "defense_strategy": 50,  # Default defense strategy (50%)
-            "current_strategy": "balanced"  # Default strategy
+            "current_strategy": "balanced",  # Default strategy
+            "pending_gems": 0  # مقدار پیش‌فرض برای جم‌های در انتظار
         })
     
     keyboard = [
@@ -670,6 +671,9 @@ async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 📌 هندلر برای خرید جم
 async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    context.bot_data["user_data"][user_id]["pending_gems"] = 0  # Reset pending gems
+    
     keyboard = [
         [InlineKeyboardButton("25 جم - 5 ترون", callback_data="buy_25_gems")],
         [InlineKeyboardButton("50 جم - 8 ترون", callback_data="buy_50_gems")],
@@ -857,14 +861,16 @@ async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     save_data(context)
 
-# 📌 هندلر برای دریافت فیش
+# 📌 هندلر برای دریافت فیش پرداخت
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     pending_gems = context.bot_data["user_data"][user_id].get("pending_gems", 0)
+    
     if pending_gems == 0:
-        await update.message.reply_text("⛔ هیچ خریدی در انتظار تأیید نیست! 😞")
+        await update.message.reply_text("⛔ هیچ خریدی در انتظار تأیید نیست!")
         return
     
+    # ایجاد دکمه‌های تایید و رد برای ادمین
     keyboard = [
         [InlineKeyboardButton("تأیید ✅", callback_data=f"confirm_{user_id}_{pending_gems}")],
         [InlineKeyboardButton("رد ❌", callback_data=f"reject_{user_id}")]
@@ -971,6 +977,7 @@ application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
 application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_[0-9]+_cannon(s)?"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu|back_to_shop)_.*"))
+application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, handle_receipt))
 
 # 🔁 وب‌هوک تلگرام
 @app.post(WEBHOOK_PATH)
