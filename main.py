@@ -648,17 +648,25 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # 📌 هندلر برای فروشگاه
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_data = context.bot_data["user_data"][user_id]
+    
     keyboard = [
         ["💎 خرید جم"],
         ["☄️ خرید توپ"],
         ["🔙 بازگشت به منو"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text(
-        "🛒 فروشگاه دزدان دریایی 🌊:\n🌟 گزینه‌ها رو انتخاب کن:",
-        reply_markup=reply_markup
+    
+    text = (
+        "🛒 فروشگاه دزدان دریایی 🌊\n\n"
+        f"💎 جم های شما: {user_data.get('gems', 0)}\n"
+        f"🪙 کیسه طلا: {user_data.get('gold', 0)}\n"
+        f"🥈 شمش نقره: {user_data.get('silver', 0)}\n\n"
+        "🌟 گزینه مورد نظر را انتخاب کنید:"
     )
-    save_data(context)
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
 # 📌 هندلر برای خرید جم
 async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -669,15 +677,17 @@ async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "💎 خرید جم:\n"
-        "25 جم = 5 ترون\n"
-        "50 جم = 8 ترون\n"
-        "100 جم = 14 ترون\n\n"
-        "آدرس ترون: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n"
-        "پس از پرداخت، فیش رو بفرست تا تأیید بشه.",
-        reply_markup=reply_markup
+    
+    text = (
+        "💎 خرید جم:\n\n"
+        "1. 25 جم = 5 ترون\n"
+        "2. 50 جم = 8 ترون\n"
+        "3. 100 جم = 14 ترون\n\n"
+        "آدرس ترون: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n\n"
+        "پس از پرداخت، فیش پرداخت را ارسال کنید."
     )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
 # 📌 هندلر برای خرید توپ
 async def buy_cannons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -689,55 +699,69 @@ async def buy_cannons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "☄️ خرید توپ:\n"
-        "1 توپ = 3 جم\n"
-        "3 توپ = 7 جم\n"
-        "10 توپ = 18 جم\n"
-        "20 توپ = 30 جم",
-        reply_markup=reply_markup
+    
+    user_id = update.message.from_user.id
+    user_data = context.bot_data["user_data"][user_id]
+    
+    text = (
+        f"☄️ خرید توپ (توپ‌های فعلی: {user_data.get('cannons', 0)})\n\n"
+        "1. 1 توپ = 3 جم\n"
+        "2. 3 توپ = 7 جم (صرفه‌جویی 2 جم)\n"
+        "3. 10 توپ = 18 جم (صرفه‌جویی 12 جم)\n"
+        "4. 20 توپ = 30 جم (صرفه‌جویی 30 جم)\n\n"
+        f"💎 جم های شما: {user_data.get('gems', 0)}"
     )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
 
-# 📌 هندلر برای پردازش خریدها
-async def handle_shop_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 📌 هندلر برای پردازش خرید توپ
+async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
     
-    if query.data == "back_to_shop":
+    user_data = context.bot_data["user_data"][user_id]
+    gems = user_data.get("gems", 0)
+    
+    if query.data == "buy_1_cannon":
+        if gems >= 3:
+            user_data["gems"] -= 3
+            user_data["cannons"] += 1
+            await query.message.reply_text("✅ 1 توپ با 3 جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ جم کافی ندارید!")
+    
+    elif query.data == "buy_3_cannons":
+        if gems >= 7:
+            user_data["gems"] -= 7
+            user_data["cannons"] += 3
+            await query.message.reply_text("✅ 3 توپ با 7 جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ جم کافی ندارید!")
+    
+    elif query.data == "buy_10_cannons":
+        if gems >= 18:
+            user_data["gems"] -= 18
+            user_data["cannons"] += 10
+            await query.message.reply_text("✅ 10 توپ با 18 جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ جم کافی ندارید!")
+    
+    elif query.data == "buy_20_cannons":
+        if gems >= 30:
+            user_data["gems"] -= 30
+            user_data["cannons"] += 20
+            await query.message.reply_text("✅ 20 توپ با 30 جم خریداری شد!")
+        else:
+            await query.message.reply_text("⛔ جم کافی ندارید!")
+    
+    elif query.data == "back_to_shop":
         await shop(update, context)
         await query.message.delete()
         return
     
-    if query.data.startswith("buy_") and "_gems" in query.data:
-        await buy_gems(update, context)
-        await query.message.delete()
-        return
-    
-    if query.data.startswith("buy_") and "_cannon" in query.data:
-        if query.data == "buy_1_cannon":
-            gems_needed = 3
-            cannons = 1
-        elif query.data == "buy_3_cannons":
-            gems_needed = 7
-            cannons = 3
-        elif query.data == "buy_10_cannons":
-            gems_needed = 18
-            cannons = 10
-        elif query.data == "buy_20_cannons":
-            gems_needed = 30
-            cannons = 20
-        
-        if context.bot_data["user_data"][user_id]["gems"] >= gems_needed:
-            context.bot_data["user_data"][user_id]["gems"] -= gems_needed
-            context.bot_data["user_data"][user_id]["cannons"] += cannons
-            await query.message.reply_text(f"✅ {cannons} توپ با {gems_needed} جم خریداری شد! ☄️")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-        await query.message.delete()
-        return
-    
     save_data(context)
+    await buy_cannons(update, context)
 
 # 📌 هندلر برای اطلاعات کشتی
 async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -806,15 +830,32 @@ async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(text, reply_markup=reply_markup)
 
-# 📌 هندلر برای پردازش پیام‌های فروشگاه
-async def handle_shop_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "💎 خرید جم":
-        await buy_gems(update, context)
-    elif text == "☄️ خرید توپ":
-        await buy_cannons(update, context)
-    elif text == "🔙 بازگشت به منو":
-        await back_to_menu(update, context)
+# 📌 هندلر برای خرید جم
+async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+    
+    data = query.data
+    gems = 0
+    tron = 0
+    if data == "buy_25_gems":
+        gems, tron = 25, 5
+    elif data == "buy_50_gems":
+        gems, tron = 50, 8
+    elif data == "buy_100_gems":
+        gems, tron = 100, 14
+    elif data == "back_to_shop":
+        await shop(update, context)
+        await query.message.delete()
+        return
+    
+    if gems:
+        context.bot_data["user_data"][user_id]["pending_gems"] = gems
+        await query.message.reply_text(
+            f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
+        )
+    save_data(context)
 
 # 📌 هندلر برای دریافت فیش
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -902,6 +943,17 @@ async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYP
         await warriors_energy(update, context)
     save_data(context)
 
+# 📌 هندلر برای پردازش منوی فروشگاه
+async def handle_shop_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text
+    
+    if choice == "💎 خرید جم":
+        await buy_gems(update, context)
+    elif choice == "☄️ خرید توپ":
+        await buy_cannons(update, context)
+    elif choice == "🔙 بازگشت به منو":
+        await back_to_menu(update, context)
+
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.Regex("^🛒 فروشگاه$"), shop))
@@ -912,13 +964,12 @@ application.add_handler(MessageHandler(filters.Regex("^🏴‍☠️ برتری�
 application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
 application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
 application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
-application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$"), handle_shop_message))
+application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$"), handle_shop_menu))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%|💎 خرید جم|☄️ خرید توپ|🔙 بازگشت به منو)$") & filters.UpdateType.MESSAGE, handle_username))
 application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_shop_purchase, pattern="buy_.*_cannon"))
 application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
 application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
-application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_cannon_(gem|gold)"))
+application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_[0-9]+_cannon(s)?"))
 application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu|back_to_shop)_.*"))
 
 # 🔁 وب‌هوک تلگرام
