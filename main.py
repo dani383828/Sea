@@ -31,53 +31,93 @@ application = Application.builder().token(TOKEN).build()
 
 # 📌 تابع برای ذخیره‌سازی داده‌ها
 def save_data(context: ContextTypes.DEFAULT_TYPE):
-    data = {
-        "usernames": context.bot_data.get("usernames", {}),
-        "user_data": {str(user_id): data for user_id, data in context.bot_data.get("user_data", {}).items()}
-    }
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
+    try:
+        data = {
+            "usernames": context.bot_data.get("usernames", {}),
+            "user_data": {str(user_id): data for user_id, data in context.bot_data.get("user_data", {}).items()}
+        }
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+        logger.info("Data saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving data: {e}")
 
 # 📌 تابع برای بارگذاری داده‌ها
 def load_data(context: ContextTypes.DEFAULT_TYPE):
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            data = json.load(f)
-            context.bot_data["usernames"] = data.get("usernames", {})
-            context.bot_data["user_data"] = {int(user_id): data for user_id, data in data.get("user_data", {}).items()}
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+                # Convert string keys back to integers
+                context.bot_data["usernames"] = data.get("usernames", {})
+                user_data = {}
+                for user_id_str, user_data_dict in data.get("user_data", {}).items():
+                    try:
+                        user_id = int(user_id_str)
+                        user_data[user_id] = user_data_dict
+                    except (ValueError, TypeError):
+                        continue
+                context.bot_data["user_data"] = user_data
+            logger.info("Data loaded successfully")
+        else:
+            context.bot_data["usernames"] = {}
+            context.bot_data["user_data"] = {}
+            logger.info("No data file found, initialized empty data structures")
+    except Exception as e:
+        logger.error(f"Error loading data: {e}")
+        context.bot_data["usernames"] = {}
+        context.bot_data["user_data"] = {}
 
 # 📌 هندلر برای /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if not context.bot_data.get("user_data"):
-        context.bot_data["user_data"] = {}
+    username = update.message.from_user.username or f"user_{user_id}"
     
+    # Ensure data structures exist
+    if "user_data" not in context.bot_data:
+        context.bot_data["user_data"] = {}
+    if "usernames" not in context.bot_data:
+        context.bot_data["usernames"] = {}
+    
+    # Initialize user data if not exists
     if user_id not in context.bot_data["user_data"]:
-        context.bot_data["user_data"][user_id] = {"state": "waiting_for_username"}
+        context.bot_data["user_data"][user_id] = {
+            "state": "waiting_for_username",
+            "pending_gems": 0
+        }
         await update.message.reply_text("🏴‍☠️ لطفاً اسمت رو به انگلیسی وارد کن (نباید تکراری باشه):")
         save_data(context)
         return
     
-    context.bot_data["user_data"][user_id]["state"] = None
-    if not context.bot_data["user_data"][user_id].get("initialized"):
-        context.bot_data["user_data"][user_id].update({
-            "username": context.bot_data.get("usernames", {}).get(user_id, f"دزد دریایی {user_id}"),
-            "gems": 5,
-            "gold": 10,
-            "silver": 15,
-            "wins": 0,
-            "games": 0,
-            "energy": 100,
-            "last_purchase": {},
-            "score": 0,
-            "cannons": 0,
-            "free_cannons": 3,
-            "initialized": True,
-            "attack_strategy": 50,  # Default attack strategy (50%)
-            "defense_strategy": 50,  # Default defense strategy (50%)
-            "current_strategy": "balanced",  # Default strategy
-            "pending_gems": 0  # مقدار پیش‌فرض برای جم‌های در انتظار
-        })
+    # Ensure all required fields exist
+    user_data = context.bot_data["user_data"][user_id]
+    required_fields = {
+        "username": context.bot_data["usernames"].get(user_id, f"دزد دریایی {user_id}"),
+        "gems": 5,
+        "gold": 10,
+        "silver": 15,
+        "wins": 0,
+        "games": 0,
+        "energy": 100,
+        "last_purchase": {},
+        "score": 0,
+        "cannons": 0,
+        "free_cannons": 3,
+        "initialized": True,
+        "attack_strategy": 50,
+        "defense_strategy": 50,
+        "current_strategy": "balanced",
+        "pending_gems": 0,
+        "state": None
+    }
+    
+    for field, default_value in required_fields.items():
+        if field not in user_data:
+            user_data[field] = default_value
+    
+    # Update username if it's not set correctly
+    if user_data["username"] != context.bot_data["usernames"].get(user_id):
+        context.bot_data["usernames"][user_id] = user_data["username"]
     
     keyboard = [
         ["⚔️ شروع بازی", "🛒 فروشگاه"],
@@ -86,7 +126,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     await update.message.reply_text(
-        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {context.bot_data['user_data'][user_id]['username']}!",
+        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {user_data['username']}!",
         reply_markup=reply_markup
     )
     save_data(context)
@@ -94,27 +134,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای دریافت نام کاربر
 async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if context.bot_data.get("user_data", {}).get(user_id, {}).get("state") != "waiting_for_username":
+    
+    # Ensure user_data exists
+    if "user_data" not in context.bot_data or user_id not in context.bot_data["user_data"]:
+        context.bot_data["user_data"][user_id] = {"state": "waiting_for_username"}
+    
+    user_data = context.bot_data["user_data"][user_id]
+    
+    if user_data.get("state") != "waiting_for_username":
         return
     
     username = update.message.text.strip()
     logger.info(f"User {user_id} entered username: {username}")
+    
+    # Validate username
     if not username.isascii():
         await update.message.reply_text("⛔ لطفاً اسم رو به انگلیسی وارد کن!")
         return
     
-    if not context.bot_data.get("usernames"):
+    # Check for duplicate username
+    if "usernames" not in context.bot_data:
         context.bot_data["usernames"] = {}
     
     if username.lower() in [u.lower() for u in context.bot_data["usernames"].values()]:
         await update.message.reply_text("⛔ این اسم قبلاً انتخاب شده! یه اسم دیگه امتحان کن.")
         return
     
-    context.bot_data["user_data"][user_id]["username"] = username
-    context.bot_data["user_data"][user_id]["state"] = None
+    # Save username and initialize user data
+    user_data["username"] = username
+    user_data["state"] = None
     context.bot_data["usernames"][user_id] = username
-    await start(update, context)
+    
+    # Initialize other user data if not exists
+    required_fields = {
+        "gems": 5,
+        "gold": 10,
+        "silver": 15,
+        "wins": 0,
+        "games": 0,
+        "energy": 100,
+        "last_purchase": {},
+        "score": 0,
+        "cannons": 0,
+        "free_cannons": 3,
+        "initialized": True,
+        "attack_strategy": 50,
+        "defense_strategy": 50,
+        "current_strategy": "balanced",
+        "pending_gems": 0
+    }
+    
+    for field, default_value in required_fields.items():
+        if field not in user_data:
+            user_data[field] = default_value
+    
     save_data(context)
+    await start(update, context)
 
 # 📌 هندلر برای برترین ناخدایان
 async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,14 +335,6 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
     save_data(context)
     await strategy_menu(update, context)
 
-# 📌 هندلر برای بازگشت به منو
-async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.callback_query.from_user.id if update.callback_query else update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = None
-    await start(update, context)
-    if update.callback_query:
-        await update.callback_query.message.delete()
-
 # 📌 تابع برای جست‌وجوی حریف
 async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int):
     user_id = update.message.from_user.id
@@ -330,7 +397,7 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         "💣 دشمن با باروت حمله می‌کنه، عقب‌نشینی کن! ⚠️",
         "🪓 با تبر هامون، ۷ نفر از اونا رو از بین بردیم! 💪",
         "🔥 کشتی دشمن داره آتش می‌گیره، ادامه بده! ⛵️",
-        "🏹 ناخدا، یه تیر کمان از دشمن به بادبانمون خورد! 😞",
+        "🏹 ناخدا، یه تیر کمان به بادبانمون خورد! 😞",
         "🪵 دشمن با یه تخته چوب داره به عرشه می‌پره! 🚢",
         "🔫 با شلیک، ۴ نفر از خدمه دشمن کشته شدن! 💥",
         "🌪️ ناخدا، طوفان داره کشتی دشمن رو نابود می‌کنه! 🌊",
@@ -507,16 +574,16 @@ async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_T
 # 📌 هندلر برای پردازش درخواست جنگ دوستانه
 async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
     await query.answer()
     
-    if query.data == "back_to_menu":
+    data = query.data
+    if data == "back_to_menu":
         await back_to_menu(update, context)
         return
     
-    if query.data.startswith("request_friend_game_"):
-        target_id = int(query.data.split("_")[3])
-        requester_id = user_id
+    if data.startswith("request_friend_game_"):
+        target_id = int(data.split("_")[3])
+        requester_id = query.from_user.id
         requester_data = context.bot_data["user_data"].get(requester_id, {})
         requester_name = requester_data.get("username", f"دزد دریایی {requester_id}")
         
@@ -554,17 +621,17 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         save_data(context)
         return
     
-    if query.data.startswith("reject_friend_game_"):
-        requester_id = int(query.data.split("_")[3])
+    if data.startswith("reject_friend_game_"):
+        requester_id = int(data.split("_")[3])
         requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
         await query.message.reply_text("⛔ درخواست جنگ دوستانه رد شد! 😞")
-        await context.bot.send_message(requester_id, f"🏴‍☠️ کاربر {context.bot_data['usernames'].get(user_id, 'ناشناس')} درخواست جنگ دوستانه‌ات رو رد کرد! ⚠️")
+        await context.bot.send_message(requester_id, f"🏴‍☠️ کاربر {context.bot_data['usernames'].get(query.from_user.id, 'ناشناس')} درخواست جنگ دوستانه‌ات رو رد کرد! ⚠️")
         await query.message.edit_reply_markup(reply_markup=None)
         save_data(context)
         return
     
-    if query.data.startswith("accept_friend_game_"):
-        requester_id, target_id = map(int, query.data.split("_")[3:5])
+    if data.startswith("accept_friend_game_"):
+        requester_id, target_id = map(int, data.split("_")[3:5])
         requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
         target_name = context.bot_data["usernames"].get(target_id, f"دزد دریایی {target_id}")
         
@@ -646,6 +713,14 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.message.reply_text(target_report)
         await query.message.edit_reply_markup(reply_markup=None)
         save_data(context)
+
+# 📌 هندلر برای بازگشت به منو
+async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.callback_query.from_user.id if update.callback_query else update.message.from_user.id
+    context.bot_data["user_data"][user_id]["state"] = None
+    await start(update, context)
+    if update.callback_query:
+        await update.callback_query.message.delete()
 
 # 📌 هندلر برای فروشگاه
 async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
