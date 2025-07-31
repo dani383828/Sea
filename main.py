@@ -79,16 +79,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user_id not in context.bot_data["user_data"]:
         context.bot_data["user_data"][user_id] = {
-            "state": "waiting_for_username",
+            "state": "waiting_for_language",
+            "language": "persian",  # زبان پیش‌فرض
             "pending_gems": 0
         }
-        await update.message.reply_text("🏴‍☠️ لطفاً اسمت رو به انگلیسی وارد کن (نباید تکراری باشه):")
+        keyboard = [
+            [InlineKeyboardButton("🇬🇧 English", callback_data="set_language_english")],
+            [InlineKeyboardButton("🇮🇷 Persian", callback_data="set_language_persian")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("🌐 Please select your language / لطفاً زبان خود را انتخاب کنید:", reply_markup=reply_markup)
         save_data(context)
         return
     
     user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
+    
     required_fields = {
-        "username": context.bot_data["usernames"].get(user_id, f"دزد دریایی {user_id}"),
+        "username": context.bot_data["usernames"].get(user_id, f"دزد دریایی {user_id}" if language == "persian" else f"Pirate {user_id}"),
         "gems": 5,
         "gold": 10,
         "silver": 15,
@@ -131,15 +139,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data["level"] = 1
     
     keyboard = [
-        ["⚔️ شروع بازی", "🛒 فروشگاه"],
-        ["🏴‍☠️ برترین ناخدایان"],
-        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"]
+        ["⚔️ شروع بازی" if language == "persian" else "⚔️ Start Game", "🛒 فروشگاه" if language == "persian" else "🛒 Shop"],
+        ["🏴‍☠️ برترین ناخدایان" if language == "persian" else "🏴‍☠️ Top Captains"],
+        ["📕 اطلاعات کشتی" if language == "persian" else "📕 Ship Info", "⚡️ انرژی جنگجویان" if language == "persian" else "⚡️ Warriors' Energy"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text(
-        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {user_data['username']}!",
-        reply_markup=reply_markup
+    welcome_text = (
+        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {user_data['username']}!" if language == "persian" else
+        f"🏴‍☠️ Welcome to the world of pirates, {user_data['username']}!"
     )
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    save_data(context)
+
+# 📌 هندلر برای انتخاب زبان
+async def handle_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+    
+    language = "english" if query.data == "set_language_english" else "persian"
+    context.bot_data["user_data"][user_id]["language"] = language
+    context.bot_data["user_data"][user_id]["state"] = "waiting_for_username"
+    
+    prompt_text = (
+        "🏴‍☠️ لطفاً اسمت رو به انگلیسی وارد کن (نباید تکراری باشه):" if language == "persian" else
+        "🏴‍☠️ Please enter your name in English (must be unique):"
+    )
+    await query.message.reply_text(prompt_text, reply_markup=ReplyKeyboardRemove())
+    await query.message.delete()
     save_data(context)
 
 # 📌 هندلر برای دریافت نام کاربر
@@ -147,7 +174,7 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     
     if "user_data" not in context.bot_data or user_id not in context.bot_data["user_data"]:
-        context.bot_data["user_data"][user_id] = {"state": "waiting_for_username"}
+        context.bot_data["user_data"][user_id] = {"state": "waiting_for_language", "language": "persian"}
     
     user_data = context.bot_data["user_data"][user_id]
     
@@ -157,15 +184,18 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
     logger.info(f"User {user_id} entered username: {username}")
     
+    language = user_data.get("language", "persian")
     if not username.isascii():
-        await update.message.reply_text("⛔ لطفاً اسم رو به انگلیسی وارد کن!")
+        error_text = "⛔ لطفاً اسم رو به انگلیسی وارد کن!" if language == "persian" else "⛔ Please enter the name in English!"
+        await update.message.reply_text(error_text)
         return
     
     if "usernames" not in context.bot_data:
         context.bot_data["usernames"] = {}
     
     if username.lower() in [u.lower() for u in context.bot_data["usernames"].values()]:
-        await update.message.reply_text("⛔ این اسم قبلاً انتخاب شده! یه اسم دیگه امتحان کن.")
+        error_text = "⛔ این اسم قبلاً انتخاب شده! یه اسم دیگه امتحان کن." if language == "persian" else "⛔ This name is already taken! Try another one."
+        await update.message.reply_text(error_text)
         return
     
     user_data["username"] = username
@@ -204,8 +234,10 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data = context.bot_data.get("user_data", {})
+    language = user_data.get(user_id, {}).get("language", "persian")
     if not user_data:
-        await update.message.reply_text("🏴‍☠️ هنوز هیچ ناخدایی در بازی ثبت نشده!")
+        text = "🏴‍☠️ هنوز هیچ ناخدایی در بازی ثبت نشده!" if language == "persian" else "🏴‍☠️ No captains registered in the game yet!"
+        await update.message.reply_text(text)
         return
     
     sorted_players = sorted(
@@ -214,16 +246,16 @@ async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reverse=True
     )[:10]
     
-    text = "🏴‍☠️ برترین ناخدایان:\n\n"
+    text = "🏴‍☠️ برترین ناخدایان:\n\n" if language == "persian" else "🏴‍☠️ Top Captains:\n\n"
     for i, (player_id, data) in enumerate(sorted_players, 1):
-        username = data.get("username", f"دزد دریایی {player_id}")
+        username = data.get("username", f"دزد دریایی {player_id}" if language == "persian" else f"Pirate {player_id}")
         score = data.get("score", 0)
         wins = data.get("wins", 0)
         games = data.get("games", 0)
         win_rate = (wins / games * 100) if games > 0 else 0
-        text += f"🌟 {i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n"
+        text += f"🌟 {i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n" if language == "persian" else f"🌟 {i}. {username} - Score: {score} - Win Rate: {win_rate:.1f}%\n"
         if player_id != user_id:
-            keyboard = [[InlineKeyboardButton("دعوت به جنگ دوستانه ✅", callback_data=f"request_friend_game_{player_id}")]]
+            keyboard = [[InlineKeyboardButton("دعوت به جنگ دوستانه ✅" if language == "persian" else "Invite to Friendly Battle ✅", callback_data=f"request_friend_game_{player_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(text, reply_markup=reply_markup)
             text = ""
@@ -236,31 +268,34 @@ async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 هندلر برای شروع بازی
 async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
     context.bot_data["user_data"][user_id]["state"] = None
     keyboard = [
-        ["دریانوردی ⛵️", "توپ ☄️"],
-        ["پهباد 🛩️", "استراتژی ⚔️"],
-        ["بازگشت به منو 🔙"]
+        ["دریانوردی ⛵️" if language == "persian" else "Sailing ⛵️", "توپ ☄️" if language == "persian" else "Cannon ☄️"],
+        ["پهباد 🛩️" if language == "persian" else "Drone 🛩️", "استراتژی ⚔️" if language == "persian" else "Strategy ⚔️"],
+        ["بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("⚓️ انتخاب کن:", reply_markup=reply_markup)
+    text = "⚓️ انتخاب کن:" if language == "persian" else "⚓️ Choose:"
+    await update.message.reply_text(text, reply_markup=reply_markup)
     save_data(context)
 
 # 📌 هندلر برای استراتژی
 async def strategy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
     
     keyboard = [
-        ["حمله گرایانه 🗡️", "دفاعی 🛡️"],
-        ["بازگشت به منو 🔙"]
+        ["حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️", "دفاعی 🛡️" if language == "persian" else "Defensive 🛡️"],
+        ["بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"]
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
     strategy_text = {
-        "aggressive": "حمله گرایانه 🗡️",
-        "defensive": "دفاعی 🛡️",
-        "balanced": "متوازن ⚖️"
+        "aggressive": "حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️",
+        "defensive": "دفاعی 🛡️" if language == "persian" else "Defensive 🛡️",
+        "balanced": "متوازن ⚖️" if language == "persian" else "Balanced ⚖️"
     }
     
     current_strategy = user_data.get("current_strategy", "balanced")
@@ -272,6 +307,11 @@ async def strategy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗡️ قدرت حمله: {attack_power}%\n"
         f"🛡️ قدرت دفاع: {defense_power}%\n\n"
         "🌟 استراتژی جدید را انتخاب کنید:"
+    ) if language == "persian" else (
+        f"⚔️ Current Strategy: {strategy_text.get(current_strategy, 'Balanced ⚖️')}\n"
+        f"🗡️ Attack Power: {attack_power}%\n"
+        f"🛡️ Defense Power: {defense_power}%\n\n"
+        "🌟 Choose a new strategy:"
     )
     
     await update.message.reply_text(text, reply_markup=reply_markup)
@@ -282,28 +322,31 @@ async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     choice = update.message.text
     user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
     
-    if choice == "حمله گرایانه 🗡️":
+    if choice == ("حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️"):
         keyboard = [
             ["0%", "10%", "20%"],
             ["35%", "50%", "65%"],
             ["80%", "90%", "100%"],
-            ["بازگشت به منو 🔙"]
+            ["بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        await update.message.reply_text("🗡️ میزان قدرت حمله را انتخاب کنید:", reply_markup=reply_markup)
+        text = "🗡️ میزان قدرت حمله را انتخاب کنید:" if language == "persian" else "🗡️ Choose attack power:"
+        await update.message.reply_text(text, reply_markup=reply_markup)
         user_data["state"] = "waiting_for_attack_strategy"
-    elif choice == "دفاعی 🛡️":
+    elif choice == ("دفاعی 🛡️" if language == "persian" else "Defensive 🛡️"):
         keyboard = [
             ["0%", "10%", "20%"],
             ["35%", "50%", "65%"],
             ["80%", "90%", "100%"],
-            ["بازگشت به منو 🔙"]
+            ["بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"]
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        await update.message.reply_text("🛡️ میزان قدرت دفاع را انتخاب کنید:", reply_markup=reply_markup)
+        text = "🛡️ میزان قدرت دفاع را انتخاب کنید:" if language == "persian" else "🛡️ Choose defense power:"
+        await update.message.reply_text(text, reply_markup=reply_markup)
         user_data["state"] = "waiting_for_defense_strategy"
-    elif choice == "بازگشت به منو 🔙":
+    elif choice == ("بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"):
         await back_to_menu(update, context)
     
     save_data(context)
@@ -312,9 +355,11 @@ async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data = context.bot_data["user_data"].get(user_id)
+    language = user_data.get("language", "persian")
     
     if not user_data:
-        await update.message.reply_text("⛔ لطفاً اول با دستور /start شروع کنید!")
+        text = "⛔ لطفاً اول با دستور /start شروع کنید!" if language == "persian" else "⛔ Please start with /start first!"
+        await update.message.reply_text(text)
         return
     
     state = user_data.get("state")
@@ -326,20 +371,26 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
         percent_str = update.message.text.replace("%", "")
         value = int(percent_str)
         if value < 0 or value > 100:
-            await update.message.reply_text("⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
+            text = "⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!" if language == "persian" else "⛔ Please select a valid option!"
+            await update.message.reply_text(text)
             return
     except ValueError:
-        await update.message.reply_text("⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
+        text = "⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!" if language == "persian" else "⛔ Please select a valid option!"
+        await update.message.reply_text(text)
         return
     
     if state == "waiting_for_attack_strategy":
         user_data["attack_strategy"] = value
-        user_data["current_strategy"] = "aggressive" if value > 50 else "balanced"
-        await update.message.reply_text(f"✅ 🗡️ قدرت حمله {value}% ذخیره شد!")
+        user_data["defense_strategy"] = 100 - value  # مجموع حمله و دفاع 100 باشد
+        user_data["current_strategy"] = "aggressive" if value > 50 else "defensive" if value < 50 else "balanced"
+        text = f"✅ 🗡️ قدرت حمله {value}% ذخیره شد! دفاع: {100 - value}%" if language == "persian" else f"✅ 🗡️ Attack power {value}% saved! Defense: {100 - value}%"
+        await update.message.reply_text(text)
     elif state == "waiting_for_defense_strategy":
         user_data["defense_strategy"] = value
-        user_data["current_strategy"] = "defensive" if value > 50 else "balanced"
-        await update.message.reply_text(f"✅ 🛡️ قدرت دفاع {value}% ذخیره شد!")
+        user_data["attack_strategy"] = 100 - value  # مجموع حمله و دفاع 100 باشد
+        user_data["current_strategy"] = "defensive" if value > 50 else "aggressive" if value < 50 else "balanced"
+        text = f"✅ 🛡️ قدرت دفاع {value}% ذخیره شد! حمله: {100 - value}%" if language == "persian" else f"✅ 🛡️ Defense power {value}% saved! Attack: {100 - value}%"
+        await update.message.reply_text(text)
     
     user_data["state"] = None
     save_data(context)
@@ -348,138 +399,92 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
 # 📌 تابع برای جست‌وجوی حریف
 async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int, drones: int):
     user_id = update.message.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
     context.bot_data["user_data"][user_id]["state"] = "in_game"
-    # Remove the menu during gameplay
     await update.message.reply_text(
-        "⛵️ در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)",
+        "⛵️ در حال جست‌وجوی حریف..." if language == "persian" else
+        "⛵️ Searching for an opponent...",
         reply_markup=ReplyKeyboardRemove()
     )
     
-    # Simulate opponent search
-    await asyncio.sleep(5)  # Reduced wait time for testing; adjust to 60 for production
+    await asyncio.sleep(5)  # برای تست؛ برای تولید به 60 تغییر دهید
     
     opponent_id = None
-    if not opponent_id:
-        opponent_name = "دزد دریایی ناشناس"
-    else:
-        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
+    opponent_name = (
+        "دزد دریایی ناشناس" if language == "persian" else
+        "Unknown Pirate"
+    )
     
     opponent_cannons = random.randint(0, 3)
-    opponent_drones = random.randint(0, 1)  # Opponent can have 0 or 1 drone
+    opponent_drones = random.randint(0, 1)
+    opponent_attack = random.randint(0, 100)
+    opponent_defense = 100 - opponent_attack  # مجموع حمله و دفاع 100 باشد
+    opponent_strategy = "aggressive" if opponent_attack > 50 else "defensive" if opponent_defense > 50 else "balanced"
     
-    # Call send_game_reports to display battle messages
-    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones)
+    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones, opponent_attack, opponent_defense, opponent_strategy)
     
     context.bot_data["user_data"][user_id]["state"] = None
     save_data(context)
-    # Restore the main menu after game ends
     await start(update, context)
 
 # 📌 تابع برای ارسال گزارش‌های بازی
-async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int, drones: int, opponent_drones: int):
+async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int, drones: int, opponent_drones: int, opponent_attack: int, opponent_defense: int, opponent_strategy: str):
     user_id = update.message.from_user.id
     user_data = context.bot_data["user_data"].get(user_id)
+    language = user_data.get("language", "persian")
     
     if not user_data:
-        await update.message.reply_text("⛔ خطا: اطلاعات کاربر یافت نشد!")
+        text = "⛔ خطا: اطلاعات کاربر یافت نشد!" if language == "persian" else "⛔ Error: User data not found!"
+        await update.message.reply_text(text)
         return
     
     attack_power = user_data.get("attack_strategy", 50)
     defense_power = user_data.get("defense_strategy", 50)
     
     battle_reports = [
-        "🏴‍☠️ ناخدا، کشتی دشمن از مه بیرون اومد! آماده نبرد شو! ⚔️",
-        "⚔️ نیروهای دشمن با طناب به کشتی‌مون چنگ زدن! شمشیرها رو آماده کن! 🗡️",
-        "💥 با یه شلیک توپ، عرشه دشمن شعله‌ور شد! 🔥",
-        "⛵️ دشمن داره از پهلو نزدیک می‌شه! دفاع رو تقویت کن! 🛡️",
-        "🗡️ ناخدا، ۳ نفر از خدمه دشمن رو با شمشیر انداختیم تو دریا! 🌊",
-        "🌊 یه موج بزرگ کشتی دشمن رو تکون داد، حالا شانس ماست! 🎉",
-        "☄️ توپچی‌ها شلیک کردن، ۲ نفر از دشمن کشته شدن! 💀",
-        "🪵 دشمن با یه تخته چوبی داره به کشتی‌مون می‌پره! 🚢",
-        "🌫️ ناخدا، یه بمب دودزا از کشتی دشمن اومد، دید کم شده! 👀",
-        "⚔️ با حمله ناگهانی، ۴ نفر از اونا رو نابود کردیم! 💪",
-        "💥 کشتی دشمن داره غرق می‌شه، یه شلیک دیگه بزن! ☄️",
-        "🏹 نیروهای دشمن تو عرشه‌مون نفوذ کردن، به جنگشون برو! ⚔️",
-        "🏹 یه تیر آرشه از کشتی دشمن اومد، یکی از خدمه زخمی شد! 😞",
-        "🪓 ناخدا، با یه ضربه تبر، ۳ نفر از اونا رو نابود کردیم! 💥",
-        "⛵️ دشمن داره فرار می‌کنه، تعقیبشون کنیم! 🚢",
-        "💥 یه انفجار تو کشتی دشمن، ۵ نفرشون از بین رفتن! 🔥",
-        "🌪️ ناخدا، طوفان داره به نفع ما می‌چرخه! 🌊",
-        "🔪 دشمن با چاقو به سمت خدمه‌مون حمله کرد، ۲ نفر کشته شدن! 💀",
-        "🌳 با شلیک دقیق، دکل دشمن شکسته شد! ⛵️",
-        "🏴‍☠️ نیروهای دشمن دارن تسلیم می‌شن، جلو برو! ⚔️",
-        "🪢 ناخدا، یه گروه از اونا با قایق به کشتی‌مون چسبیدن! 🚤",
-        "🗡️ با شمشیر هامون، ۶ نفر از اونا رو به زانو درآوردیم! 💪",
-        "🌫️ دشمن داره از دود استفاده می‌کنه، مراقب باش! 👀",
-        "💥 با شلیک توپ، عرشه دشمن نابود شد! 🔥",
-        "🔫 ناخدا، ۴ نفر از خدمه دشمن رو با تفنگ زدیم! 💥",
-        "⛵️ کشتی دشمن داره می‌لرزه، شانس ماست! 🎉",
-        "🪢 دشمن با یه طناب بزرگ داره به کشتی‌مون میاد! 🚢",
-        "🗡️ ناخدا، با یه ضربه، ۵ نفر از اونا رو کشتیم! 💀",
-        "🌊 یه موج، قایق دشمن رو واژگون کرد! ⛵️",
-        "🎯 دشمن داره با نیزه حمله می‌کنه، دفاع کن! 🛡️",
-        "💥 با شلیک توپ، ۳ نفر از اونا تو دریا غرق شدن! 🌊",
-        "🏚️ ناخدا، یه گروه کوچک از دشمن تو انبار پنهان شدن! 👀",
-        "💣 دشمن با باروت حمله می‌کنه، عقب‌نشینی کن! ⚠️",
-        "🪓 با تبر هامون، ۷ نفر از اونا رو از بین بردیم! 💪",
-        "🔥 کشتی دشمن داره آتش می‌گیره، ادامه بده! ⛵️",
-        "🏹 ناخدا، یه تیر کمان به بادبانمون خورد! 😞",
-        "🪵 دشمن با یه تخته چوب داره به عرشه می‌پره! 🚢",
-        "🔫 با شلیک، ۴ نفر از خدمه دشمن کشته شدن! 💥",
-        "🌪️ ناخدا، طوفان داره کشتی دشمن رو نابود می‌کنه! 🌊",
-        "🔪 دشمن داره با شمشیر به سمت ما می‌دوه! ⚔️",
-        "🗡️ با یه ضربه قوی، ۶ نفر از اونا رو نابود کردیم! 💪",
-        "💥 کشتی دشمن داره غرق می‌شه، شلیک دیگه‌ای بزن! ☄️",
-        "🏹 ناخدا، یه گروه از اونا دارن از پشت حمله می‌کنن! ⚠️",
-        "🔫 با تفنگ، ۳ نفر از دشمن رو از پای درآوردیم! 💥",
-        "🌫️ دشمن داره با دود غلیظ ما رو گیج می‌کنه! 👀",
-        "💥 با شلیک، ۵ نفر از خدمه دشمن غرق شدن! 🌊",
-        "🌊 ناخدا، یه موج بزرگ کشتی دشمن رو واژگون کرد! ⛵️",
-        "🎯 دشمن با نیزه به سمت عرشه میاد! 🛡️",
-        "🗡️ با شمشیر، ۷ نفر از اونا رو نابود کردیم! 💪",
-        "🔥 کشتی دشمن داره می‌سوزه، شانس ماست! 🎉",
-        "🏚️ ناخدا، یه گروه از اونا تو زیرزمین پنهان شدن! 👀",
-        "💣 دشمن با باروت به ما حمله می‌کنه! ⚠️",
-        "🪓 با تبر، ۴ نفر از اونا رو از پای درآوردیم! 💥",
-        "🌪️ ناخدا، طوفان داره کشتی‌مون رو نجات می‌ده! 🌊",
-        "🔪 دشمن با چاقو به خدمه حمله می‌کنه! ⚔️",
-        "💥 با شلیک توپ، ۶ نفر از اونا کشته شدن! ☄️",
-        "⛵️ کشتی دشمن داره غرق می‌شه، تعقیب کن! 🚢",
-        "🏹 ناخدا، یه تیر کمان به دکل دشمن خورد! 💥",
-        "🪵 دشمن با تخته چوب به عرشه می‌پره! 🚢",
-        "🔫 با تفنگ، ۵ نفر از اونا رو نابود کردیم! 💪",
-        "🔥 ناخدا، یه انفجار تو انبار دشمن رخ داد! 💥",
-        "🪢 دشمن با طناب به دکل ما چسبیده! 🚢",
-        "🗡️ با شمشیر، ۸ نفر از اونا رو به دریا انداختیم! 🌊",
-        "🔥 کشتی دشمن داره می‌شکنه، شانس ماست! 🎉",
-        "🌪️ ناخدا، طوفان به نفع ما می‌چرخه! 🌊",
-        "🎯 دشمن با نیزه به سمت ما حمله می‌کنه! 🛡️",
-        "💥 با شلیک، ۴ نفر از اونا کشته شدن! 💀",
-        "🌊 ناخدا، یه موج بزرگ دشمن رو غرق کرد! ⛵️",
-        "🌫️ دشمن با دود داره ما رو گیج می‌کنه! 👀",
-        "🪓 با تبر، ۶ نفر از اونا رو از بین بردیم! 💪",
-        "🔥 کشتی دشمن داره می‌سوزه، ادامه بده! ⛵️",
-        "🏹 ناخدا، یه تیر آرشه به دشمن برخورد کرد! 💥",
-        "🌫️ دشمن با بمب دودزا ما رو محاصره می‌کنه! ⚠️",
-        "💥 با توپ، ۵ نفر از اونا غرق شدن! 🌊",
-        "🌪️ ناخدا، طوفان دشمن رو نابود می‌کنه! 🌊",
-        "🔪 دشمن با چاقو به خدمه‌مون حمله کرد! ⚔️",
-        "💥 با شلیک، ۷ نفر از اونا رو نابود کردیم!"  # خط اصلاح‌شده
+        ("🏴‍☠️ ناخدا، کشتی دشمن از مه بیرون اومد! آماده نبرد شو! ⚔️", "🏴‍☠️ Captain, enemy ship emerged from the fog! Prepare for battle! ⚔️"),
+        ("⚔️ نیروهای دشمن با طناب به کشتی‌مون چنگ زدن! شمشیرها رو آماده کن! 🗡️", "⚔️ Enemy forces are boarding with ropes! Ready your swords! 🗡️"),
+        ("💥 با یه شلیک توپ، عرشه دشمن شعله‌ور شد! 🔥", "💥 One cannon shot set the enemy deck ablaze! 🔥"),
+        ("⛵️ دشمن داره از پهلو نزدیک می‌شه! دفاع رو تقویت کن! 🛡️", "⛵️ Enemy is approaching from the side! Strengthen defenses! 🛡️"),
+        ("🗡️ ناخدا، ۳ نفر از خدمه دشمن رو با شمشیر انداختیم تو دریا! 🌊", "🗡️ Captain, we threw 3 enemy crew into the sea with swords! 🌊"),
+        ("🌊 یه موج بزرگ کشتی دشمن رو تکون داد، حالا شانس ماست! 🎉", "🌊 A huge wave rocked the enemy ship, now’s our chance! 🎉"),
+        ("☄️ توپچی‌ها شلیک کردن، ۲ نفر از دشمن کشته شدن! 💀", "☄️ Cannons fired, 2 enemies killed! 💀"),
+        ("🪵 دشمن با یه تخته چوبی داره به کشتی‌مون می‌پره! 🚢", "🪵 Enemy is boarding with a wooden plank! 🚢"),
+        ("🌫️ ناخدا، یه بمب دودزا از کشتی دشمن اومد، دید کم شده! 👀", "🌫️ Captain, enemy threw a smoke bomb, visibility is low! 👀"),
+        ("⚔️ با حمله ناگهانی، ۴ نفر از اونا رو نابود کردیم! 💪", "⚔️ Sudden attack, we destroyed 4 of them! 💪"),
+        ("💥 کشتی دشمن داره غرق می‌شه، یه شلیک دیگه بزن! ☄️", "💥 Enemy ship is sinking, fire another shot! ☄️"),
+        ("🏹 نیروهای دشمن تو عرشه‌مون نفوذ کردن، به جنگشون برو! ⚔️", "🏹 Enemy forces infiltrated our deck, fight them! ⚔️"),
+        ("🏹 یه تیر آرشه از کشتی دشمن اومد، یکی از خدمه زخمی شد! 😞", "🏹 An arrow from the enemy ship hit one of our crew! 😞"),
+        ("🪓 ناخدا، با یه ضربه تبر، ۳ نفر از اونا رو نابود کردیم! 💥", "🪓 Captain, one axe swing took out 3 of them! 💥"),
+        ("⛵️ دشمن داره فرار می‌کنه، تعقیبشون کنیم! 🚢", "⛵️ Enemy is fleeing, pursue them! 🚢"),
+        ("💥 یه انفجار تو کشتی دشمن، ۵ نفرشون از بین رفتن! 🔥", "💥 Explosion on enemy ship, 5 of them are gone! 🔥"),
+        ("🌪️ ناخدا، طوفان داره به نفع ما می‌چرخه! 🌊", "🌪️ Captain, the storm is turning in our favor! 🌊"),
+        ("🔪 دشمن با چاقو به سمت خدمه‌مون حمله کرد، ۲ نفر کشته شدن! 💀", "🔪 Enemy attacked our crew with knives, 2 killed! 💀"),
+        ("🌳 با شلیک دقیق، دکل دشمن شکسته شد! ⛵️", "🌳 Precise shot broke the enemy’s mast! ⛵️"),
+        ("🏴‍☠️ نیروهای دشمن دارن تسلیم می‌شن، جلو برو! ⚔️", "🏴‍☠️ Enemy forces are surrendering, press forward! ⚔️"),
     ]
     
     num_reports = random.randint(6, 20)
     selected_messages = random.sample(battle_reports, min(num_reports, len(battle_reports)))
+    selected_messages = [msg[0] if language == "persian" else msg[1] for msg in selected_messages]
     
-    # Add drone-specific messages
     for i in range(drones):
-        hit_chance = 0.9  # Drones have high hit chance
+        hit_chance = 0.9
         hit = random.random() < hit_chance
-        selected_messages.append(f"🛩️ پهباد {i+1} ما شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}")
+        msg = (
+            f"🛩️ پهباد {i+1} ما شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}" if language == "persian" else
+            f"🛩️ Our drone {i+1} fired! {'Hit and caused heavy damage! 💥' if hit else 'Missed! 😞'}"
+        )
+        selected_messages.append(msg)
     
     for i in range(opponent_drones):
         hit_chance = 0.9
         hit = random.random() < hit_chance
-        selected_messages.append(f"🛩️ پهباد {i+1} دشمن شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}")
+        msg = (
+            f"🛩️ پهباد {i+1} دشمن شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}" if language == "persian" else
+            f"🛩️ Enemy drone {i+1} fired! {'Hit and caused damage! 😞' if hit else 'Missed! 🎉'}"
+        )
+        selected_messages.append(msg)
     
     total_duration = 60
     interval = total_duration / len(selected_messages)
@@ -491,43 +496,56 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         except Exception as e:
             logger.error(f"Error sending game report: {e}")
     
-    base_win_chance = min(100, (cannons * 20) + (energy / 2) + (drones * 50))  # Drones add significant win chance
-    strategy_bonus = (attack_power - 50) * 0.5
+    base_win_chance = min(100, (cannons * 20) + (energy / 2) + (drones * 50))
+    strategy_bonus = (attack_power - 50) * 0.5 - (opponent_defense / 100) * 30
     win_chance = min(100, base_win_chance + strategy_bonus)
     
-    opponent_chance = random.uniform(20, 80) + (opponent_drones * 50)
-    win = random.random() * 100 < win_chance
+    opponent_chance = min(100, (opponent_cannons * 20) + (opponent_drones * 50) + (opponent_attack - 50) * 0.5 - (defense_power / 100) * 30)
+    win = random.random() * (win_chance + opponent_chance) < win_chance
     
-    report = "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔" if not win else "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆"
-    context.bot_data["user_data"][user_id]["games"] += 1
-    context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 5)
-    context.bot_data["user_data"][user_id]["cannons"] = max(0, context.bot_data["user_data"][user_id]["cannons"] - cannons)
-    context.bot_data["user_data"][user_id]["drones"] = max(0, context.bot_data["user_data"][user_id]["drones"] - drones)
+    strategy_text = {
+        "aggressive": "حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️",
+        "defensive": "دفاعی 🛡️" if language == "persian" else "Defensive 🛡️",
+        "balanced": "متوازن ⚖️" if language == "persian" else "Balanced ⚖️"
+    }
+    
+    report = (
+        f"🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔\nاستراتژی دشمن: {strategy_text.get(opponent_strategy, 'متوازن ⚖️')}\nقدرت حمله دشمن: {opponent_attack}%\nقدرت دفاع دشمن: {opponent_defense}%" if language == "persian" else
+        f"🏴‍☠️ Captain, our ship is wrecked! ⛔\nEnemy Strategy: {strategy_text.get(opponent_strategy, 'Balanced ⚖️')}\nEnemy Attack Power: {opponent_attack}%\nEnemy Defense Power: {opponent_defense}%"
+    ) if not win else (
+        f"🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆\nاستراتژی دشمن: {strategy_text.get(opponent_strategy, 'متوازن ⚖️')}\nقدرت حمله دشمن: {opponent_attack}%\nقدرت دفاع دشمن: {opponent_defense}%" if language == "persian" else
+        f"🏴‍☠️ Captain, we sank the enemy! 🏆\nEnemy Strategy: {strategy_text.get(opponent_strategy, 'Balanced ⚖️')}\nEnemy Attack Power: {opponent_attack}%\nEnemy Defense Power: {opponent_defense}%"
+    )
+    
+    user_data["games"] += 1
+    user_data["energy"] = max(0, user_data["energy"] - 5)
+    user_data["cannons"] = max(0, user_data["cannons"] - cannons)
+    user_data["drones"] = max(0, user_data["drones"] - drones)
     
     if win:
-        context.bot_data["user_data"][user_id]["wins"] += 1
-        context.bot_data["user_data"][user_id]["score"] += 30
-        context.bot_data["user_data"][user_id]["gold"] += 3
-        context.bot_data["user_data"][user_id]["silver"] += 5
-        context.bot_data["user_data"][user_id]["energy"] = min(100, context.bot_data["user_data"][user_id]["energy"] + 10)
+        user_data["wins"] += 1
+        user_data["score"] += 30
+        user_data["gold"] += 3
+        user_data["silver"] += 5
+        user_data["energy"] = min(100, user_data["energy"] + 10)
         if random.random() < 0.25:
-            context.bot_data["user_data"][user_id]["gems"] += 1
-            report += "\n💎 یه جم پیدا کردیم! 🎉"
-        report += "\n🏆 جایزه: ۳۰ امتیاز, 3 🪙 کیسه طلا, 5 🥈 شمش نقره, +10% ⚡ انرژی"
+            user_data["gems"] += 1
+            report += "\n💎 یه جم پیدا کردیم! 🎉" if language == "persian" else "\n💎 We found a gem! 🎉"
+        report += "\n🏆 جایزه: ۳۰ امتیاز, 3 🪙 کیسه طلا, 5 🥈 شمش نقره, +10% ⚡ انرژی" if language == "persian" else "\n🏆 Reward: 30 points, 3 🪙 gold bags, 5 🥈 silver bars, +10% ⚡ energy"
     else:
-        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_data"][user_id]["score"] - 10)
-        if context.bot_data["user_data"][user_id]["gold"] >= 3:
-            context.bot_data["user_data"][user_id]["gold"] -= 3
-        if context.bot_data["user_data"][user_id]["silver"] >= 5:
-            context.bot_data["user_data"][user_id]["silver"] -= 5
-        if random.random() < 0.25 and context.bot_data["user_data"][user_id]["gems"] >= 1:
-            context.bot_data["user_data"][user_id]["gems"] -= 1
-            report += "\n💎 یه جم از دست دادیم! 😢"
-        context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 30)
-        report += "\n⛔ جریمه: -10 امتیاز, -3 🪙 کیسه طلا, -5 🥈 شمش نقره, -30% ⚡ انرژی"
+        user_data["score"] = max(0, user_data["score"] - 10)
+        if user_data["gold"] >= 3:
+            user_data["gold"] -= 3
+        if user_data["silver"] >= 5:
+            user_data["silver"] -= 5
+        if random.random() < 0.25 and user_data["gems"] >= 1:
+            user_data["gems"] -= 1
+            report += "\n💎 یه جم از دست دادیم! 😢" if language == "persian" else "\n💎 We lost a gem! 😢"
+        user_data["energy"] = max(0, user_data["energy"] - 30)
+        report += "\n⛔ جریمه: -10 امتیاز, -3 🪙 کیسه طلا, -5 🥈 شمش نقره, -30% ⚡ انرژی" if language == "persian" else "\n⛔ Penalty: -10 points, -3 🪙 gold bags, -5 🥈 silver bars, -30% ⚡ energy"
     
     try:
-        await update.message.reply_text(f"⚔️ بازی با {opponent_name}:\n{report}")
+        await update.message.reply_text(f"⚔️ {'بازی با' if language == 'persian' else 'Battle with'} {opponent_name}:\n{report}")
     except Exception as e:
         logger.error(f"Error sending final report: {e}")
     
@@ -537,73 +555,284 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     choice = update.message.text
-    if choice == "بازگشت به منو 🔙":
+    language = context.bot_data["user_data"][user_id]["language"]
+    
+    if choice == ("بازگشت به منو 🔙" if language == "persian" else "Back to Menu 🔙"):
         await back_to_menu(update, context)
         return
     
-    if choice == "دریانوردی ⛵️":
+    if choice == ("دریانوردی ⛵️" if language == "persian" else "Sailing ⛵️"):
         if context.bot_data["user_data"][user_id]["state"] == "in_game":
-            await update.message.reply_text("⛵️ در حال بازی هستید! لطفاً تا پایان بازی صبر کنید.")
+            text = "⛵️ در حال بازی هستید! لطفاً تا پایان بازی صبر کنید." if language == "persian" else "⛵️ You are already in a game! Please wait until it ends."
+            await update.message.reply_text(text)
             return
         cannons = context.bot_data["user_data"][user_id]["cannons"]
         energy = context.bot_data["user_data"][user_id]["energy"]
         drones = context.bot_data["user_data"][user_id]["drones"]
         asyncio.create_task(search_opponent(update, context, cannons, energy, drones))
     
-    elif choice == "توپ ☄️":
+    elif choice == ("توپ ☄️" if language == "persian" else "Cannon ☄️"):
         free_cannons = context.bot_data["user_data"][user_id]["free_cannons"]
         if free_cannons > 0:
             context.bot_data["user_data"][user_id]["cannons"] += 1
             context.bot_data["user_data"][user_id]["free_cannons"] -= 1
-            await update.message.reply_text(f"☄️ یه توپ رایگان گرفتی! ({free_cannons - 1} توپ رایگان باقی مونده)")
+            text = f"☄️ یه توپ رایگان گرفتی! ({free_cannons - 1} توپ رایگان باقی مونده)" if language == "persian" else f"☄️ You got a free cannon! ({free_cannons - 1} free cannons left)"
+            await update.message.reply_text(text)
         else:
-            await update.message.reply_text("☄️ توپ رایگان تموم شده! برای خرید توپ به فروشگاه برو:")
+            text = "☄️ توپ رایگان تموم شده! برای خرید توپ به فروشگاه برو:" if language == "persian" else "☄️ No free cannons left! Go to the shop to buy cannons:"
+            await update.message.reply_text(text)
             await shop(update, context)
         save_data(context)
     
-    elif choice == "پهباد 🛩️":
+    elif choice == ("پهباد 🛩️" if language == "persian" else "Drone 🛩️"):
         free_drones = context.bot_data["user_data"][user_id]["free_drones"]
         if free_drones > 0:
             context.bot_data["user_data"][user_id]["drones"] += 1
             context.bot_data["user_data"][user_id]["free_drones"] -= 1
-            await update.message.reply_text(f"🛩️ یه پهباد رایگان گرفتی! ({free_drones - 1} پهباد رایگان باقی مونده)")
+            text = f"🛩️ یه پهباد رایگان گرفتی! ({free_drones - 1} پهباد رایگان باقی مونده)" if language == "persian" else f"🛩️ You got a free drone! ({free_drones - 1} free drones left)"
+            await update.message.reply_text(text)
         else:
-            await update.message.reply_text("🛩️ پهباد رایگان تموم شده! برای خرید پهباد به فروشگاه برو:")
+            text = "🛩️ پهباد رایگان تموم شده! برای خرید پهباد به فروشگاه برو:" if language == "persian" else "🛩️ No free drones left! Go to the shop to buy drones:"
+            await update.message.reply_text(text)
             await shop(update, context)
         save_data(context)
     
-    elif choice == "استراتژی ⚔️":
+    elif choice == ("استراتژی ⚔️" if language == "persian" else "Strategy ⚔️"):
         await strategy_menu(update, context)
     
-    elif choice in ["حمله گرایانه 🗡️", "دفاعی 🛡️"]:
+    elif choice in [("حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️"), ("دفاعی 🛡️" if language == "persian" else "Defensive 🛡️")]:
         await set_strategy(update, context)
 
+# 📌 هندلر برای فروشگاه
+async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
+    
+    keyboard = [
+        ["💎 خرید جم" if language == "persian" else "💎 Buy Gems", "☄️ خرید توپ" if language == "persian" else "☄️ Buy Cannons"],
+        ["🛩️ خرید پهباد" if language == "persian" else "🛩️ Buy Drones", "🔙 بازگشت به منو" if language == "persian" else "🔙 Back to Menu"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    
+    text = (
+        f"🛒 فروشگاه دزدان دریایی 🌊\n\n"
+        f"💎 جم های شما: {user_data.get('gems', 0)}\n"
+        f"🪙 کیسه طلا: {user_data.get('gold', 0)}\n"
+        f"🥈 شمش نقره: {user_data.get('silver', 0)}\n\n"
+        "🌟 گزینه مورد نظر را انتخاب کنید:"
+    ) if language == "persian" else (
+        f"🛒 Pirate Shop 🌊\n\n"
+        f"💎 Your Gems: {user_data.get('gems', 0)}\n"
+        f"🪙 Gold Bags: {user_data.get('gold', 0)}\n"
+        f"🥈 Silver Bars: {user_data.get('silver', 0)}\n\n"
+        "🌟 Choose an option:"
+    )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+# 📌 هندلر برای خرید جم
+async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
+    context.bot_data["user_data"][user_id]["pending_gems"] = 0
+    
+    keyboard = [
+        [InlineKeyboardButton("25 جم - 5 ترون" if language == "persian" else "25 Gems - 5 TRON", callback_data="buy_25_gems")],
+        [InlineKeyboardButton("50 جم - 8 ترون" if language == "persian" else "50 Gems - 8 TRON", callback_data="buy_50_gems")],
+        [InlineKeyboardButton("100 جم - 14 ترون" if language == "persian" else "100 Gems - 14 TRON", callback_data="buy_100_gems")],
+        [InlineKeyboardButton("🔙 بازگشت به فروشگاه" if language == "persian" else "🔙 Back to Shop", callback_data="back_to_shop")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        "💎 خرید جم:\n\n"
+        "1. 25 جم = 5 ترون\n"
+        "2. 50 جم = 8 ترون\n"
+        "3. 100 جم = 14 ترون\n\n"
+        "آدرس ترون: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n\n"
+        "پس از پرداخت، فیش پرداخت را ارسال کنید."
+    ) if language == "persian" else (
+        "💎 Buy Gems:\n\n"
+        "1. 25 Gems = 5 TRON\n"
+        "2. 50 Gems = 8 TRON\n"
+        "3. 100 Gems = 14 TRON\n\n"
+        "TRON Address: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n\n"
+        "Send the payment receipt after payment."
+    )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
 # 📌 هندلر برای خرید توپ
+async def buy_cannons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
+    
+    keyboard = [
+        [InlineKeyboardButton("1 توپ - 3 جم" if language == "persian" else "1 Cannon - 3 Gems", callback_data="buy_1_cannon")],
+        [InlineKeyboardButton("3 توپ - 7 جم" if language == "persian" else "3 Cannons - 7 Gems", callback_data="buy_3_cannons")],
+        [InlineKeyboardButton("10 توپ - 18 جم" if language == "persian" else "10 Cannons - 18 Gems", callback_data="buy_10_cannons")],
+        [InlineKeyboardButton("20 توپ - 30 جم" if language == "persian" else "20 Cannons - 30 Gems", callback_data="buy_20_cannons")],
+        [InlineKeyboardButton("🔙 بازگشت به فروشگاه" if language == "persian" else "🔙 Back to Shop", callback_data="back_to_shop")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"☄️ خرید توپ (توپ‌های فعلی: {user_data.get('cannons', 0)})\n\n"
+        "1. 1 توپ = 3 جم\n"
+        "2. 3 توپ = 7 جم (صرفه‌جویی 2 جم)\n"
+        "3. 10 توپ = 18 جم (صرفه‌جویی 12 جم)\n"
+        "4. 20 توپ = 30 جم (صرفه‌جویی 30 جم)\n\n"
+        f"💎 جم های شما: {user_data.get('gems', 0)}"
+    ) if language == "persian" else (
+        f"☄️ Buy Cannons (Current Cannons: {user_data.get('cannons', 0)})\n\n"
+        "1. 1 Cannon = 3 Gems\n"
+        "2. 3 Cannons = 7 Gems (Save 2 Gems)\n"
+        "3. 10 Cannons = 18 Gems (Save 12 Gems)\n"
+        "4. 20 Cannons = 30 Gems (Save 30 Gems)\n\n"
+        f"💎 Your Gems: {user_data.get('gems', 0)}"
+    )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+# 📌 هندلر برای خرید پهباد
+async def buy_drones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_data = context.bot_data["user_data"][user_id]
+    language = user_data.get("language", "persian")
+    
+    keyboard = [
+        [InlineKeyboardButton("1 پهباد - 7 جم" if language == "persian" else "1 Drone - 7 Gems", callback_data="buy_1_drone")],
+        [InlineKeyboardButton("3 پهباد - 18 جم" if language == "persian" else "3 Drones - 18 Gems", callback_data="buy_3_drones")],
+        [InlineKeyboardButton("5 پهباد - 30 جم" if language == "persian" else "5 Drones - 30 Gems", callback_data="buy_5_drones")],
+        [InlineKeyboardButton("🔙 بازگشت به فروشگاه" if language == "persian" else "🔙 Back to Shop", callback_data="back_to_shop")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = (
+        f"🛩️ خرید پهباد (پهبادهای فعلی: {user_data.get('drones', 0)})\n\n"
+        "1. 1 پهباد = 7 جم\n"
+        "2. 3 پهباد = 18 جم (صرفه‌جویی 3 جم)\n"
+        "3. 5 پهباد = 30 جم (صرفه‌جویی 5 جم)\n\n"
+        f"💎 جم های شما: {user_data.get('gems', 0)}"
+    ) if language == "persian" else (
+        f"🛩️ Buy Drones (Current Drones: {user_data.get('drones', 0)})\n\n"
+        "1. 1 Drone = 7 Gems\n"
+        "2. 3 Drones = 18 Gems (Save 3 Gems)\n"
+        "3. 5 Drones = 30 Gems (Save 5 Gems)\n\n"
+        f"💎 Your Gems: {user_data.get('gems', 0)}"
+    )
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
+
+# 📌 هندلر برای پردازش خرید توپ
 async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
     await query.answer()
     
-    if query.data == "buy_cannon_gem":
-        if context.bot_data["user_data"][user_id]["gems"] >= 1:
-            context.bot_data["user_data"][user_id]["gems"] -= 1
-            context.bot_data["user_data"][user_id]["cannons"] += 1
-            await query.message.reply_text("☄️ 💎 یه توپ با ۱ جم خریدی!")
+    user_data = context.bot_data["user_data"][user_id]
+    gems = user_data.get("gems", 0)
+    
+    if query.data == "buy_1_cannon":
+        if gems >= 3:
+            user_data["gems"] -= 3
+            user_data["cannons"] += 1
+            text = "✅ 1 توپ با 3 جم خریداری شد!" if language == "persian" else "✅ 1 Cannon bought with 3 Gems!"
+            await query.message.reply_text(text)
         else:
-            await query.message.reply_text("⛔ 💎 جم کافی نداری!")
-    elif query.data == "buy_cannon_gold":
-        if context.bot_data["user_data"][user_id]["gold"] >= 5:
-            context.bot_data["user_data"][user_id]["gold"] -= 5
-            context.bot_data["user_data"][user_id]["cannons"] += 1
-            await query.message.reply_text("☄️ 🪙 یه توپ با ۵ کیسه طلا خریدی!")
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "buy_3_cannons":
+        if gems >= 7:
+            user_data["gems"] -= 7
+            user_data["cannons"] += 3
+            text = "✅ 3 توپ با 7 جم خریداری شد!" if language == "persian" else "✅ 3 Cannons bought with 7 Gems!"
+            await query.message.reply_text(text)
         else:
-            await query.message.reply_text("⛔ 🪙 کیسه طلا کافی نداری!")
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "buy_10_cannons":
+        if gems >= 18:
+            user_data["gems"] -= 18
+            user_data["cannons"] += 10
+            text = "✅ 10 توپ با 18 جم خریداری شد!" if language == "persian" else "✅ 10 Cannons bought with 18 Gems!"
+            await query.message.reply_text(text)
+        else:
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "buy_20_cannons":
+        if gems >= 30:
+            user_data["gems"] -= 30
+            user_data["cannons"] += 20
+            text = "✅ 20 توپ با 30 جم خریداری شد!" if language == "persian" else "✅ 20 Cannons bought with 30 Gems!"
+            await query.message.reply_text(text)
+        else:
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "back_to_shop":
+        await shop(update, context)
+    
+    await query.message.delete()
+    save_data(context)
+
+# 📌 هندلر برای پردازش خرید پهباد
+async def handle_drone_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
+    await query.answer()
+    
+    user_data = context.bot_data["user_data"][user_id]
+    gems = user_data.get("gems", 0)
+    
+    if query.data == "buy_1_drone":
+        if gems >= 7:
+            user_data["gems"] -= 7
+            user_data["drones"] += 1
+            text = "✅ 1 پهباد با 7 جم خریداری شد!" if language == "persian" else "✅ 1 Drone bought with 7 Gems!"
+            await query.message.reply_text(text)
+        else:
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "buy_3_drones":
+        if gems >= 18:
+            user_data["gems"] -= 18
+            user_data["drones"] += 3
+            text = "✅ 3 پهباد با 18 جم خریداری شد!" if language == "persian" else "✅ 3 Drones bought with 18 Gems!"
+            await query.message.reply_text(text)
+        else:
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "buy_5_drones":
+        if gems >= 30:
+            user_data["gems"] -= 30
+            user_data["drones"] += 5
+            text = "✅ 5 پهباد با 30 جم خریداری شد!" if language == "persian" else "✅ 5 Drones bought with 30 Gems!"
+            await query.message.reply_text(text)
+        else:
+            text = "⛔ جم کافی ندارید!" if language == "persian" else "⛔ Not enough gems!"
+            await query.message.reply_text(text)
+    
+    elif query.data == "back_to_shop":
+        await shop(update, context)
+    
     await query.message.delete()
     save_data(context)
 
 # 📌 هندلر برای پردازش درخواست جنگ دوستانه
 async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id
+    language = context.bot_data["user_data"][user_id]["language"]
     await query.answer()
     
     data = query.data
@@ -615,7 +844,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         target_id = int(data.split("_")[3])
         requester_id = query.from_user.id
         requester_data = context.bot_data["user_data"].get(requester_id, {})
-        requester_name = requester_data.get("username", f"دزد دریایی {requester_id}")
+        requester_name = requester_data.get("username", f"دزد دریایی {requester_id}" if language == "persian" else f"Pirate {requester_id}")
         
         gems = requester_data.get("gems", 5)
         gold = requester_data.get("gold", 10)
@@ -633,32 +862,43 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🥈 شمش نقره: {silver}\n"
             f"🏆 میانگین پیروزی: {win_rate:.1f}%\n"
             f"⚡ انرژی: {energy}%"
+        ) if language == "persian" else (
+            f"🏴‍☠️ User {requester_name} sent you a friendly battle request! Accept? ⚔️\n"
+            f"📕 {requester_name}'s Ship Info:\n"
+            f"💎 Gems: {gems}\n"
+            f"🪙 Gold Bags: {gold}\n"
+            f"🥈 Silver Bars: {silver}\n"
+            f"🏆 Win Rate: {win_rate:.1f}%\n"
+            f"⚡ Energy: {energy}%"
         )
         
         keyboard = [
-            [InlineKeyboardButton("قبول می‌کنم ✅", callback_data=f"accept_friend_game_{requester_id}_{target_id}")],
-            [InlineKeyboardButton("قبول نمی‌کنم ❌", callback_data=f"reject_friend_game_{requester_id}")]
+            [InlineKeyboardButton("قبول می‌کنم ✅" if language == "persian" else "I Accept ✅", callback_data=f"accept_friend_game_{requester_id}_{target_id}")],
+            [InlineKeyboardButton("قبول نمی‌کنم ❌" if language == "persian" else "I Decline ❌", callback_data=f"reject_friend_game_{requester_id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(target_id, text, reply_markup=reply_markup)
-        await query.message.reply_text(f"⚔️ درخواست جنگ دوستانه برای {context.bot_data['usernames'].get(target_id, 'ناشناس')} ارسال شد! ⏳")
+        text = f"⚔️ درخواست جنگ دوستانه برای {context.bot_data['usernames'].get(target_id, 'ناشناس' if language == 'persian' else 'Unknown')} ارسال شد! ⏳" if language == "persian" else f"⚔️ Friendly battle request sent to {context.bot_data['usernames'].get(target_id, 'Unknown')}! ⏳"
+        await query.message.reply_text(text)
         await query.message.delete()
         save_data(context)
         return
     
     if data.startswith("reject_friend_game_"):
         requester_id = int(data.split("_")[3])
-        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
-        await query.message.reply_text("⛔ درخواست جنگ دوستانه رد شد! 😞")
-        await context.bot.send_message(requester_id, f"🏴‍☠️ کاربر {context.bot_data['usernames'].get(query.from_user.id, 'ناشناس')} درخواست جنگ دوستانه‌ات رو رد کرد! ⚠️")
+        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}" if language == "persian" else f"Pirate {requester_id}")
+        text = "⛔ درخواست جنگ دوستانه رد شد! 😞" if language == "persian" else "⛔ Friendly battle request rejected! 😞"
+        await query.message.reply_text(text)
+        text = f"🏴‍☠️ کاربر {context.bot_data['usernames'].get(query.from_user.id, 'ناشناس' if language == 'persian' else 'Unknown')} درخواست جنگ دوستانه‌ات رو رد کرد! ⚠️" if language == "persian" else f"🏴‍☠️ User {context.bot_data['usernames'].get(query.from_user.id, 'Unknown')} rejected your friendly battle request! ⚠️"
+        await context.bot.send_message(requester_id, text)
         await query.message.edit_reply_markup(reply_markup=None)
         save_data(context)
         return
     
     if data.startswith("accept_friend_game_"):
         requester_id, target_id = map(int, data.split("_")[3:5])
-        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
-        target_name = context.bot_data["usernames"].get(target_id, f"دزد دریایی {target_id}")
+        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}" if language == "persian" else f"Pirate {requester_id}")
+        target_name = context.bot_data["usernames"].get(target_id, f"دزد دریایی {target_id}" if language == "persian" else f"Pirate {target_id}")
         
         requester_data = context.bot_data["user_data"].get(requester_id, {})
         target_data = context.bot_data["user_data"].get(target_id, {})
@@ -676,13 +916,10 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         target_drones = target_data.get("drones", 0)
         
         requester_chance = min(100, (requester_cannons * 20) + (requester_energy / 2) + (requester_drones * 50))
-        requester_chance += (requester_attack - 50) * 0.5
+        requester_chance += (requester_attack - 50) * 0.5 - (target_defense / 100) * 30
         
         target_chance = min(100, (target_cannons * 20) + (target_energy / 2) + (target_drones * 50))
-        target_chance += (target_attack - 50) * 0.5
-        
-        requester_chance -= (target_defense / 100) * 30
-        target_chance -= (requester_defense / 100) * 30
+        target_chance += (target_attack - 50) * 0.5 - (requester_defense / 100) * 30
         
         win = random.random() * (requester_chance + target_chance) < requester_chance
         
@@ -695,53 +932,66 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         requester_data["drones"] = max(0, requester_data.get("drones", 0) - requester_drones)
         target_data["drones"] = max(0, target_data.get("drones", 0) - target_drones)
         
-        requester_report = f"⚔️ بازی دوستانه با {target_name}:\n"
-        target_report = f"⚔️ بازی دوستانه با {requester_name}:\n"
+        requester_report = f"⚔️ {'بازی دوستانه با' if language == 'persian' else 'Friendly battle with'} {target_name}:\n"
+        target_report = f"⚔️ {'بازی دوستانه با' if language == 'persian' else 'Friendly battle with'} {requester_name}:\n"
         
         if win:
             requester_data["wins"] = requester_data.get("wins", 0) + 1
             requester_data["score"] = requester_data.get("score", 0) + 30
             target_data["score"] = max(0, target_data.get("score", 0) - 10)
-            requester_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉"
-            target_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞"
+            requester_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉" if language == "persian" else "🏴‍☠️ Captain, we sank the enemy! 🏆 🎉"
+            target_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞" if language == "persian" else "🏴‍☠️ Captain, our ship is wrecked! ⛔ 😞"
         else:
             target_data["wins"] = target_data.get("wins", 0) + 1
             target_data["score"] = target_data.get("score", 0) + 30
             requester_data["score"] = max(0, requester_data.get("score", 0) - 10)
-            target_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉"
-            requester_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞"
+            target_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉" if language == "persian" else "🏴‍☠️ Captain, we sank the enemy! 🏆 🎉"
+            requester_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞" if language == "persian" else "🏴‍☠️ Captain, our ship is wrecked! ⛔ 😞"
         
         messages = [
-            "🏴‍☠️ نبرد دوستانه آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن! ⚔️",
-            "🌊 طوفان در راهه! دریا داره خشمگین می‌شه! 🌪️",
-            f"⚡ جنگجویان شما با انرژی {requester_energy}% آماده‌اند! 💪",
-            f"⚡ جنگجویان حریف با انرژی {target_energy}% آماده‌اند! 💪"
+            ("🏴‍☠️ نبرد دوستانه آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن! ⚔️", "🏴‍☠️ Friendly battle started! Ships are approaching on the horizon! ⚔️"),
+            ("🌊 طوفان در راهه! دریا داره خشمگین می‌شه! 🌪️", "🌊 Storm is coming! The sea is getting rough! 🌪️"),
+            (f"⚡ جنگجویان شما با انرژی {requester_energy}% آماده‌اند! 💪", f"⚡ Your warriors are ready with {requester_energy}% energy! 💪"),
+            (f"⚡ جنگجویان حریف با انرژی {target_energy}% آماده‌اند! 💪", f"⚡ Enemy warriors are ready with {target_energy}% energy! 💪")
         ]
         
         for i in range(requester_cannons):
             hit_chance = 0.5 * (requester_attack / 100)
             hit = random.random() < hit_chance
-            messages.append(f"☄️ شلیک توپ {i+1} از {requester_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}")
+            messages.append(
+                (f"☄️ شلیک توپ {i+1} از {requester_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}", 
+                 f"☄️ Cannon {i+1} shot from {requester_name}! {'Hit! 💥' if hit else 'Missed! 😞'}")
+            )
         
         for i in range(target_cannons):
             hit_chance = 0.5 * (target_attack / 100)
             defense_reduction = (requester_defense / 100) * 0.3
             hit = random.random() < (hit_chance - defense_reduction)
-            messages.append(f"☄️ شلیک توپ {i+1} از {target_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}")
+            messages.append(
+                (f"☄️ شلیک توپ {i+1} از {target_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}", 
+                 f"☄️ Cannon {i+1} shot from {target_name}! {'Hit! 💥' if hit else 'Missed! 😞'}")
+            )
         
         for i in range(requester_drones):
             hit_chance = 0.9
             hit = random.random() < hit_chance
-            messages.append(f"🛩️ پهباد {i+1} از {requester_name} شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}")
+            messages.append(
+                (f"🛩️ پهباد {i+1} از {requester_name} شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}", 
+                 f"🛩️ Drone {i+1} from {requester_name} fired! {'Hit and caused heavy damage! 💥' if hit else 'Missed! 😞'}")
+            )
         
         for i in range(target_drones):
             hit_chance = 0.9
             defense_reduction = (requester_defense / 100) * 0.3
             hit = random.random() < (hit_chance - defense_reduction)
-            messages.append(f"🛩️ پهباد {i+1} از {target_name} شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}")
+            messages.append(
+                (f"🛩️ پهباد {i+1} از {target_name} شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}", 
+                 f"🛩️ Drone {i+1} from {target_name} fired! {'Hit and caused damage! 😞' if hit else 'Missed! 🎉'}")
+            )
         
         num_reports = random.randint(5, 10)
         selected_messages = random.sample(messages, min(num_reports, len(messages)))
+        selected_messages = [msg[0] if language == "persian" else msg[1] for msg in selected_messages]
         total_duration = 30
         interval = total_duration / len(selected_messages)
         
@@ -763,428 +1013,189 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.message.delete()
 
-# 📌 هندلر برای فروشگاه
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    keyboard = [
-        ["💎 خرید جم", "☄️ خرید توپ"],
-        ["🛩️ خرید پهباد", "🔙 بازگشت به منو"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    
-    text = (
-        "🛒 فروشگاه دزدان دریایی 🌊\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}\n"
-        f"🪙 کیسه طلا: {user_data.get('gold', 0)}\n"
-        f"🥈 شمش نقره: {user_data.get('silver', 0)}\n\n"
-        "🌟 گزینه مورد نظر را انتخاب کنید:"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید جم
-async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["pending_gems"] = 0
-    
-    keyboard = [
-        [InlineKeyboardButton("25 جم - 5 ترون", callback_data="buy_25_gems")],
-        [InlineKeyboardButton("50 جم - 8 ترون", callback_data="buy_50_gems")],
-        [InlineKeyboardButton("100 جم - 14 ترون", callback_data="buy_100_gems")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        "💎 خرید جم:\n\n"
-        "1. 25 جم = 5 ترون\n"
-        "2. 50 جم = 8 ترون\n"
-        "3. 100 جم = 14 ترون\n\n"
-        "آدرس ترون: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n\n"
-        "پس از پرداخت، فیش پرداخت را ارسال کنید."
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید توپ
-async def buy_cannons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("1 توپ - 3 جم", callback_data="buy_1_cannon")],
-        [InlineKeyboardButton("3 توپ - 7 جم", callback_data="buy_3_cannons")],
-        [InlineKeyboardButton("10 توپ - 18 جم", callback_data="buy_10_cannons")],
-        [InlineKeyboardButton("20 توپ - 30 جم", callback_data="buy_20_cannons")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    text = (
-        f"☄️ خرید توپ (توپ‌های فعلی: {user_data.get('cannons', 0)})\n\n"
-        "1. 1 توپ = 3 جم\n"
-        "2. 3 توپ = 7 جم (صرفه‌جویی 2 جم)\n"
-        "3. 10 توپ = 18 جم (صرفه‌جویی 12 جم)\n"
-        "4. 20 توپ = 30 جم (صرفه‌جویی 30 جم)\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید پهباد
-async def buy_drones(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("1 پهباد - 7 جم", callback_data="buy_1_drone")],
-        [InlineKeyboardButton("3 پهباد - 18 جم", callback_data="buy_3_drones")],
-        [InlineKeyboardButton("5 پهباد - 30 جم", callback_data="buy_5_drones")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    text = (
-        f"🛩️ خرید پهباد (پهبادهای فعلی: {user_data.get('drones', 0)})\n\n"
-        "1. 1 پهباد = 7 جم\n"
-        "2. 3 پهباد = 18 جم (صرفه‌جویی 3 جم)\n"
-        "3. 5 پهباد = 30 جم (صرفه‌جویی 5 جم)\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای پردازش خرید توپ
-async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    user_data = context.bot_data["user_data"][user_id]
-    gems = user_data.get("gems", 0)
-    
-    if query.data == "buy_1_cannon":
-        if gems >= 3:
-            user_data["gems"] -= 3
-            user_data["cannons"] += 1
-            await query.message.reply_text("✅ 1 توپ با 3 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_3_cannons":
-        if gems >= 7:
-            user_data["gems"] -= 7
-            user_data["cannons"] += 3
-            await query.message.reply_text("✅ 3 توپ با 7 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_10_cannons":
-        if gems >= 18:
-            user_data["gems"] -= 18
-            user_data["cannons"] += 10
-            await query.message.reply_text("✅ 10 توپ با 18 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_20_cannons":
-        if gems >= 30:
-            user_data["gems"] -= 30
-            user_data["cannons"] += 20
-            await query.message.reply_text("✅ 20 توپ با 30 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    save_data(context)
-    await buy_cannons(update, context)
-
-# 📌 هندلر برای پردازش خرید پهباد
-async def handle_drone_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    user_data = context.bot_data["user_data"][user_id]
-    gems = user_data.get("gems", 0)
-    
-    if query.data == "buy_1_drone":
-        if gems >= 7:
-            user_data["gems"] -= 7
-            user_data["drones"] += 1
-            await query.message.reply_text("✅ 1 پهباد با 7 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_3_drones":
-        if gems >= 18:
-            user_data["gems"] -= 18
-            user_data["drones"] += 3
-            await query.message.reply_text("✅ 3 پهباد با 18 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_5_drones":
-        if gems >= 30:
-            user_data["gems"] -= 30
-            user_data["drones"] += 5
-            await query.message.reply_text("✅ 5 پهباد با 30 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    save_data(context)
-    await buy_drones(update, context)
-
 # 📌 هندلر برای اطلاعات کشتی
 async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
+    user_data = context.bot_data["user_data"].get(user_id, {})
+    language = user_data.get("language", "persian")
+    
+    username = user_data.get("username", f"دزد دریایی {user_id}" if language == "persian" else f"Pirate {user_id}")
     gems = user_data.get("gems", 5)
     gold = user_data.get("gold", 10)
     silver = user_data.get("silver", 15)
     wins = user_data.get("wins", 0)
     games = user_data.get("games", 0)
     energy = user_data.get("energy", 100)
-    attack = user_data.get("attack_strategy", 50)
-    defense = user_data.get("defense_strategy", 50)
-    strategy = user_data.get("current_strategy", "balanced")
     score = user_data.get("score", 0)
+    cannons = user_data.get("cannons", 0)
+    free_cannons = user_data.get("free_cannons", 3)
+    drones = user_data.get("drones", 0)
+    free_drones = user_data.get("free_drones", 1)
     level = user_data.get("level", 1)
+    attack_power = user_data.get("attack_strategy", 50)
+    defense_power = user_data.get("defense_strategy", 50)
+    strategy = user_data.get("current_strategy", "balanced")
     
     strategy_text = {
-        "aggressive": "حمله گرایانه 🗡️",
-        "defensive": "دفاعی 🛡️",
-        "balanced": "متوازن ⚖️"
+        "aggressive": "حمله گرایانه 🗡️" if language == "persian" else "Aggressive 🗡️",
+        "defensive": "دفاعی 🛡️" if language == "persian" else "Defensive 🛡️",
+        "balanced": "متوازن ⚖️" if language == "persian" else "Balanced ⚖️"
     }
     
     win_rate = (wins / games * 100) if games > 0 else 0
     text = (
-        "📕 اطلاعات کشتی 🌟:\n"
+        f"📕 اطلاعات کشتی {username}:\n\n"
         f"💎 جم: {gems}\n"
         f"🪙 کیسه طلا: {gold}\n"
         f"🥈 شمش نقره: {silver}\n"
-        f"🏆 میانگین پیروزی: {win_rate:.1f}%\n"
+        f"🏆 تعداد برد: {wins}\n"
+        f"🎮 تعداد بازی: {games}\n"
+        f"📈 میانگین برد: {win_rate:.1f}%\n"
         f"⚡ انرژی: {energy}%\n"
-        f"⚔️ استراتژی فعلی: {strategy_text.get(strategy, 'متوازن ⚖️')}\n"
-        f"🗡️ قدرت حمله: {attack}%\n"
-        f"🛡️ قدرت دفاع: {defense}%\n"
-        f"🌟 لِوِل: {level}\n"
-        f"📊 امتیاز: {score}"
+        f"📊 امتیاز: {score}\n"
+        f"☄️ توپ‌ها: {cannons} (رایگان: {free_cannons})\n"
+        f"🛩️ پهبادها: {drones} (رایگان: {free_drones})\n"
+        f"🌟 سطح: {level}\n"
+        f"⚔️ استراتژی: {strategy_text.get(strategy, 'متوازن ⚖️')}\n"
+        f"🗡️ قدرت حمله: {attack_power}%\n"
+        f"🛡️ قدرت دفاع: {defense_power}%"
+    ) if language == "persian" else (
+        f"📕 {username}'s Ship Info:\n\n"
+        f"💎 Gems: {gems}\n"
+        f"🪙 Gold Bags: {gold}\n"
+        f"🥈 Silver Bars: {silver}\n"
+        f"🏆 Wins: {wins}\n"
+        f"🎮 Games Played: {games}\n"
+        f"📈 Win Rate: {win_rate:.1f}%\n"
+        f"⚡ Energy: {energy}%\n"
+        f"📊 Score: {score}\n"
+        f"☄️ Cannons: {cannons} (Free: {free_cannons})\n"
+        f"🛩️ Drones: {drones} (Free: {free_drones})\n"
+        f"🌟 Level: {level}\n"
+        f"⚔️ Strategy: {strategy_text.get(strategy, 'Balanced ⚖️')}\n"
+        f"🗡️ Attack Power: {attack_power}%\n"
+        f"🛡️ Defense Power: {defense_power}%"
     )
+    
     await update.message.reply_text(text)
 
 # 📌 هندلر برای انرژی جنگجویان
 async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
+    user_data = context.bot_data["user_data"].get(user_id, {})
+    language = user_data.get("language", "persian")
+    
     energy = user_data.get("energy", 100)
-    now = datetime.now()
-    last_purchase = user_data.get("last_purchase", {})
+    text = (
+        f"⚡ انرژی جنگجویان: {energy}%\n\n"
+        "هر ۳۰ دقیقه، ۵٪ انرژی اضافه می‌شه! ⏳\n"
+        "برای بازیابی سریع‌تر، به فروشگاه برو و جم بخر! 🛒"
+    ) if language == "persian" else (
+        f"⚡ Warriors' Energy: {energy}%\n\n"
+        "Every 30 minutes, 5% energy is added! ⏳\n"
+        "For faster recovery, go to the shop and buy gems! 🛒"
+    )
     
-    available_items = []
-    items = [
-        ("۱ بسته بیسکویت دریایی (۲۵٪ ⚡ انرژی)", "biscuit", 0, 4, 25),
-        ("۵ عدد ماهی خشک (۳۵٪ ⚡ انرژی)", "fish", 1, 1, 35),
-        ("۳ بسته میوه خشک‌شده (۳۰٪ ⚡ انرژی)", "fruit", 1, 0, 30),
-        ("۱۰ قالب پنیر کهنه (۵۰٪ ⚡ انرژی)", "cheese", 1, 3, 50),
-        ("۱۰ بطری آب (۲۰٪ ⚡ انرژی)", "water", 0, 3, 20),
-    ]
-    
-    for item_name, item_id, gold_cost, silver_cost, energy_gain in items:
-        last_time = last_purchase.get(item_id)
-        if not last_time or (now - last_time).total_seconds() >= 24 * 3600:
-            available_items.append(
-                [InlineKeyboardButton(f"{item_name} - قیمت: {gold_cost} 🪙, {silver_cost} 🥈", callback_data=f"buy_{item_id}")]
-            )
-    
-    reply_markup = InlineKeyboardMarkup(available_items) if available_items else None
-    text = f"⚡ انرژی جنگجویان: {energy}%\n"
-    if energy < 100:
-        text += "🏴‍☠️ اگر جنگجویان خسته‌اند، خوراکی بخر! 🌟"
-    else:
-        text += "✅ جنگجویان پر از انرژی‌اند! 💪"
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
+    await update.message.reply_text(text)
 
-# 📌 هندلر برای خرید جم
-async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    data = query.data
-    gems = 0
-    tron = 0
-    if data == "buy_25_gems":
-        gems, tron = 25, 5
-    elif data == "buy_50_gems":
-        gems, tron = 50, 8
-    elif data == "buy_100_gems":
-        gems, tron = 100, 14
-    elif data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    if gems:
-        context.bot_data["user_data"][user_id]["pending_gems"] = gems
-        await query.message.reply_text(
-            f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
-        )
-    save_data(context)
+# 📌 تابع برای به‌روزرسانی انرژی
+async def update_energy(context: ContextTypes.DEFAULT_TYPE):
+    while True:
+        try:
+            for user_id, user_data in context.bot_data.get("user_data", {}).items():
+                energy = user_data.get("energy", 100)
+                if energy < 100:
+                    user_data["energy"] = min(100, energy + 5)
+                    save_data(context)
+            await asyncio.sleep(1800)  # هر ۳۰ دقیقه
+        except Exception as e:
+            logger.error(f"Error updating energy: {e}")
+            await asyncio.sleep(60)
 
-# 📌 هندلر برای دریافت فیش پرداخت
-async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# 📌 هندلر برای پردازش پرداخت جم
+async def handle_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    pending_gems = context.bot_data["user_data"][user_id].get("pending_gems", 0)
+    language = context.bot_data["user_data"][user_id]["language"]
     
-    if pending_gems == 0:
-        await update.message.reply_text("⛔ هیچ خریدی در انتظار تأیید نیست!")
+    if update.message.photo or update.message.document:
+        text = (
+            "📸 فیش پرداخت دریافت شد! در حال بررسی توسط ادمین... ⏳\n"
+            "بزودی جم‌ها به حسابت اضافه می‌شه! 💎"
+        ) if language == "persian" else (
+            "📸 Payment receipt received! Being reviewed by admin... ⏳\n"
+            "Gems will be added to your account soon! 💎"
+        )
+        await update.message.reply_text(text)
+        await context.bot.forward_message(ADMIN_ID, user_id, update.message.message_id)
+    else:
+        text = "⛔ لطفاً فیش پرداخت رو به صورت عکس یا فایل بفرست!" if language == "persian" else "⛔ Please send the payment receipt as a photo or file!"
+        await update.message.reply_text(text)
+
+# 📌 هندلر برای تأیید پرداخت توسط ادمین
+async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ فقط ادمین می‌تونه این دستور رو اجرا کنه!")
         return
     
-    keyboard = [
-        [InlineKeyboardButton("تأیید ✅", callback_data=f"confirm_{user_id}_{pending_gems}")],
-        [InlineKeyboardButton("رد ❌", callback_data=f"reject_{user_id}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if not context.args:
+        await update.message.reply_text("لطفاً آیدی کاربر و تعداد جم رو وارد کنید! مثال: /confirm_payment 123456789 25")
+        return
     
-    if update.message.photo:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=update.message.photo[-1].file_id,
-            caption=f"💰 فیش پرداخت از کاربر {user_id} برای {pending_gems} جم 🌟",
-            reply_markup=reply_markup
-        )
-    elif update.message.text:
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"💰 فیش متنی از کاربر {user_id} برای {pending_gems} جم:\n{update.message.text} 🌟",
-            reply_markup=reply_markup
-        )
-    
-    await update.message.reply_text("💌 فیش به ادمین ارسال شد! منتظر تأیید باش ⏳")
-    save_data(context)
-
-# 📌 هندلر برای تأیید/رد فیش توسط ادمین
-async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    if data.startswith("confirm_"):
-        _, user_id, gems = data.split("_")
-        user_id, gems = int(user_id), int(gems)
-        context.bot_data["user_data"][user_id]["gems"] += gems
-        context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, f"✅ 💎 خریدت تأیید شد! {gems} جم اضافه شد! 🎉")
-        await query.message.edit_reply_markup(reply_markup=None)
-    elif data.startswith("reject_"):
-        _, user_id = data.split("_")
-        user_id = int(user_id)
-        context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, "⛔ خریدت رد شد! دوباره تلاش کن 😞")
-        await query.message.edit_reply_markup(reply_markup=None)
-    save_data(context)
-
-# 📌 هندلر برای خرید خوراکی
-async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    data = query.data
-    now = datetime.now()
-    items = {
-        "buy_biscuit": (0, 4, 25),
-        "buy_fish": (1, 1, 35),
-        "buy_fruit": (1, 0, 30),
-        "buy_cheese": (1, 3, 50),
-        "buy_water": (0, 3, 20),
-    }
-    
-    if data in items:
-        gold_cost, silver_cost, energy_gain = items[data]
-        gold = context.bot_data["user_data"][user_id]["gold"]
-        silver = context.bot_data["user_data"][user_id]["silver"]
-        energy = context.bot_data["user_data"][user_id]["energy"]
+    try:
+        target_id, gems = int(context.args[0]), int(context.args[1])
+        user_data = context.bot_data["user_data"].get(target_id, {})
+        language = user_data.get("language", "persian")
         
-        if gold >= gold_cost and silver >= silver_cost:
-            context.bot_data["user_data"][user_id]["gold"] -= gold_cost
-            context.bot_data["user_data"][user_id]["silver"] -= silver_cost
-            context.bot_data["user_data"][user_id]["energy"] = min(100, energy + energy_gain)
-            context.bot_data["user_data"][user_id]["last_purchase"][data.replace("buy_", "")] = now
-            await query.message.reply_text(f"✅ 🌟 خرید انجام شد! {energy_gain}% ⚡ انرژی اضافه شد! 🎉")
-        else:
-            await query.message.reply_text("⛔ 🪙 یا 🥈 کافی نیست! 😞")
-        await query.message.delete()
-        await warriors_energy(update, context)
-    save_data(context)
+        user_data["gems"] = user_data.get("gems", 0) + gems
+        user_data["pending_gems"] = 0
+        save_data(context)
+        
+        text = f"💎 {gems} جم به حساب شما اضافه شد! 🎉" if language == "persian" else f"💎 {gems} Gems added to your account! 🎉"
+        await context.bot.send_message(target_id, text)
+        await update.message.reply_text(f"✅ {gems} جم برای کاربر {target_id} تأیید شد!")
+    except (IndexError, ValueError):
+        await update.message.reply_text("⛔ خطا: لطفاً آیدی کاربر و تعداد جم رو درست وارد کنید!")
 
-# 📌 هندلر برای پردازش منوی فروشگاه
-async def handle_shop_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    choice = update.message.text
-    
-    if choice == "💎 خرید جم":
-        await buy_gems(update, context)
-    elif choice == "☄️ خرید توپ":
-        await buy_cannons(update, context)
-    elif choice == "🛩️ خرید پهباد":
-        await buy_drones(update, context)
-    elif choice == "🔙 بازگشت به منو":
-        await back_to_menu(update, context)
+# 📌 تنظیم هندلرها
+def setup_handlers(application):
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_language_selection, pattern="^set_language_"))
+    application.add_handler(MessageHandler(filters.Regex(r"^(⚔️ شروع بازی|⚔️ Start Game)$"), start_game))
+    application.add_handler(MessageHandler(filters.Regex(r"^(🛒 فروشگاه|🛒 Shop)$"), shop))
+    application.add_handler(MessageHandler(filters.Regex(r"^(🏴‍☠️ برترین ناخدایان|🏴‍☠️ Top Captains)$"), top_captains))
+    application.add_handler(MessageHandler(filters.Regex(r"^(📕 اطلاعات کشتی|📕 Ship Info)$"), ship_info))
+    application.add_handler(MessageHandler(filters.Regex(r"^(⚡️ انرژی جنگجویان|⚡️ Warriors' Energy)$"), warriors_energy))
+    application.add_handler(MessageHandler(filters.Regex(r"^(💎 خرید جم|💎 Buy Gems)$"), buy_gems))
+    application.add_handler(MessageHandler(filters.Regex(r"^(☄️ خرید توپ|☄️ Buy Cannons)$"), buy_cannons))
+    application.add_handler(MessageHandler(filters.Regex(r"^(🛩️ خرید پهباد|🛩️ Buy Drones)$"), buy_drones))
+    application.add_handler(MessageHandler(filters.Regex(r"^(دریانوردی ⛵️|Sailing ⛵️|توپ ☄️|Cannon ☄️|پهباد 🛩️|Drone 🛩️|استراتژی ⚔️|Strategy ⚔️|حمله گرایانه 🗡️|Aggressive 🗡️|دفاعی 🛡️|Defensive 🛡️|بازگشت به منو 🔙|Back to Menu 🔙)$"), handle_game_options))
+    application.add_handler(MessageHandler(filters.Regex(r"^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
+    application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="^buy_.*_cannon"))
+    application.add_handler(CallbackQueryHandler(handle_drone_purchase, pattern="^buy_.*_drone"))
+    application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game_|accept_friend_game_|reject_friend_game_|back_to_menu)"))
+    application.add_handler(CallbackQueryHandler(buy_gems, pattern="^buy_.*_gems"))
+    application.add_handler(CallbackQueryHandler(shop, pattern="^back_to_shop$"))
+    application.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_payment))
+    application.add_handler(CommandHandler("confirm_payment", confirm_payment))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
 
-# 🔗 ثبت هندلرها
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.Regex("^🛒 فروشگاه$"), shop))
-application.add_handler(MessageHandler(filters.Regex("^📕 اطلاعات کشتی$"), ship_info))
-application.add_handler(MessageHandler(filters.Regex("^⚡️ انرژی جنگجویان$"), warriors_energy))
-application.add_handler(MessageHandler(filters.Regex("^⚔️ شروع بازی$"), start_game))
-application.add_handler(MessageHandler(filters.Regex("^🏴‍☠️ برترین ناخدایان$"), top_captains))
-application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|پهباد 🛩️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
-application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
-application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🛩️ خرید پهباد|🔙 بازگشت به منو)$"), handle_shop_menu))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|پهباد 🛩️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%|💎 خرید جم|☄️ خرید توپ|🛩️ خرید پهباد|🔙 بازگشت به منو)$") & filters.UpdateType.MESSAGE, handle_username))
-application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
-application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
-application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_[0-9]+_cannon(s)?"))
-application.add_handler(CallbackQueryHandler(handle_drone_purchase, pattern="buy_[0-9]+_drone(s)?"))
-application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu|back_to_shop)_.*"))
-application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, handle_receipt))
-
-# 🔁 وب‌هوک تلگرام
+# 📌 تنظیم وب‌هوک
 @app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
+async def webhook(request: Request):
+    update = Update.de_json(await request.json(), application.bot)
+    await application.process_update(update)
+    return {"status": "ok"}
 
-# 🔥 زمان بالا آمدن سرور
-@app.on_event("startup")
-async def on_startup():
+# 📌 تابع اصلی برای اجرا
+async def main():
     load_data(application)
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook set:", WEBHOOK_URL)
-    await application.initialize()
-    await application.start()
+    setup_handlers(application)
+    await application.bot.set_webhook(WEBHOOK_URL)
+    application.job_queue.run_repeating(update_energy, interval=1800, first=10)
+    logger.info("Bot started with webhook")
 
-# 🛑 هنگام خاموشی
-@app.on_event("shutdown")
-async def on_shutdown():
-    save_data(application)
-    await application.updater.stop()
-    await application.stop()
-    await application.shutdown()
+if __name__ == "__main__":
+    import uvicorn
+    application.loop.run_until_complete(main())
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
