@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
 )
@@ -349,12 +349,10 @@ async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TY
 async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int, drones: int):
     user_id = update.message.from_user.id
     context.bot_data["user_data"][user_id]["state"] = "in_game"
-    # Remove the menu during gameplay
     await update.message.reply_text(
         "⛵️ در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)",
         reply_markup=ReplyKeyboardRemove()
     )
-    await asyncio.sleep(60)
     
     opponent_id = None
     if not opponent_id:
@@ -363,12 +361,16 @@ async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, ca
         opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
     
     opponent_cannons = random.randint(0, 3)
-    opponent_drones = random.randint(0, 1)  # Opponent can have 0 or 1 drone
-    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones)
-    context.bot_data["user_data"][user_id]["state"] = None
-    save_data(context)
-    # Restore the main menu after game ends
-    await start(update, context)
+    opponent_drones = random.randint(0, 1)
+    try:
+        await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones)
+    except Exception as e:
+        logger.error(f"Error in send_game_reports: {e}")
+        await update.message.reply_text("⛔ خطایی در ارسال گزارش بازی رخ داد!")
+    finally:
+        context.bot_data["user_data"][user_id]["state"] = None
+        save_data(context)
+        await start(update, context)  # Restore main menu after game
 
 # 📌 تابع برای ارسال گزارش‌های بازی
 async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int, drones: int, opponent_drones: int):
@@ -479,7 +481,7 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     
     # Add drone-specific messages
     for i in range(drones):
-        hit_chance = 0.9  # Drones have high hit chance
+        hit_chance = 0.9
         hit = random.random() < hit_chance
         selected_messages.append(f"🛩️ پهباد {i+1} ما شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}")
     
@@ -489,13 +491,17 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         selected_messages.append(f"🛩️ پهباد {i+1} دشمن شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}")
     
     total_duration = 60
-    interval = total_duration / len(selected_messages)
+    interval = total_duration / max(len(selected_messages), 1)
     
     for msg in selected_messages:
-        await update.message.reply_text(msg)
-        await asyncio.sleep(interval)
+        try:
+            await update.message.reply_text(msg, reply_markup=ReplyKeyboardRemove())
+            await asyncio.sleep(interval)
+        except Exception as e:
+            logger.error(f"Error sending battle report: {e}")
+            continue
     
-    base_win_chance = min(100, (cannons * 20) + (energy / 2) + (drones * 50))  # Drones add significant win chance
+    base_win_chance = min(100, (cannons * 20) + (energy / 2) + (drones * 50))
     strategy_bonus = (attack_power - 50) * 0.5
     win_chance = min(100, base_win_chance + strategy_bonus)
     
@@ -530,21 +536,26 @@ async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 30)
         report += "\n⛔ جریمه: -10 امتیاز, -3 🪙 کیسه طلا, -5 🥈 شمش نقره, -30% ⚡ انرژی"
     
-    await update.message.reply_text(f"⚔️ بازی با {opponent_name}:\n{report}")
-    save_data(context)
+    try:
+        await update.message.reply_text(f"⚔️ بازی با {opponent_name}:\n{report}", reply_markup=ReplyKeyboardRemove())
+    except Exception as e:
+        logger.error(f"Error sending final report: {e}")
+        await update.message.reply_text("⛔ خطایی در نمایش نتیجه بازی رخ داد!")
 
 # 📌 هندلر برای پردازش بازی و خرید توپ و پهباد
 async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     choice = update.message.text
+    
+    if context.bot_data["user_data"][user_id]["state"] == "in_game":
+        await update.message.reply_text("⛵️ در حال بازی هستید! لطفاً تا پایان بازی صبر کنید.")
+        return
+    
     if choice == "بازگشت به منو 🔙":
         await back_to_menu(update, context)
         return
     
     if choice == "دریانوردی ⛵️":
-        if context.bot_data["user_data"][user_id]["state"] == "in_game":
-            await update.message.reply_text("⛵️ در حال بازی هستید! لطفاً تا پایان بازی صبر کنید.")
-            return
         cannons = context.bot_data["user_data"][user_id]["cannons"]
         energy = context.bot_data["user_data"][user_id]["energy"]
         drones = context.bot_data["user_data"][user_id]["drones"]
@@ -678,7 +689,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         requester_chance = min(100, (requester_cannons * 20) + (requester_energy / 2) + (requester_drones * 50))
         requester_chance += (requester_attack - 50) * 0.5
         
-        target_chance = min(100, (target_cannons * 20) + (target_energy / 2) + (target_drones * 50))
+        target_chance = min(100, (target_cannons * 20) + (target_energy / 2) + (target_drones * 50兩
         target_chance += (target_attack - 50) * 0.5
         
         requester_chance -= (target_defense / 100) * 30
@@ -708,7 +719,7 @@ async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
             target_data["wins"] = target_data.get("wins", 0) + 1
             target_data["score"] = target_data.get("score", 0) + 30
             requester_data["score"] = max(0, requester_data.get("score", 0) - 10)
-            target_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉"
+            target_report += "🏴‍☠️])^3
             requester_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞"
         
         messages = [
@@ -1143,6 +1154,34 @@ async def handle_shop_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await buy_drones(update, context)
     elif choice == "🔙 بازگشت به منو":
         await back_to_menu(update, context)
+
+# �جستجوی حریف
+async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int, drones: int):
+    user_id = update.message.from_user.id
+    context.bot_data["user_data"][user_id]["state"] = "in_game"
+    await update.message.reply_text(
+        "⛵️ در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await asyncio.sleep(60)
+    
+    opponent_id = None
+    if not opponent_id:
+        opponent_name = "دزد دریایی ناشناس"
+    else:
+        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
+    
+    opponent_cannons = random.randint(0, 3)
+    opponent_drones = random.randint(0, 1)
+    try:
+        await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones)
+    except Exception as e:
+        logger.error(f"Error in send_game_reports: {e}")
+        await update.message.reply_text("⛔ خطایی در ارسال گزارش بازی رخ داد!")
+    finally:
+        context.bot_data["user_data"][user_id]["state"] = None
+        save_data(context)
+        await start(update, context)
 
 # 🔗 ثبت هندلرها
 application.add_handler(CommandHandler("start", start))
