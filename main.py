@@ -1,1170 +1,1223 @@
 import os
-import json
 import logging
-from fastapi import FastAPI, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, CallbackQueryHandler, filters
-)
-from datetime import datetime, timedelta
-import random
 import asyncio
+from datetime import datetime, timedelta
+from fastapi import FastAPI, Request
+from telegram import (
+    Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
+)
+from telegram.ext import (
+    Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+)
 
-TOKEN = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
+# ---------- تنظیمات اولیه ----------
+TOKEN = os.getenv("BOT_TOKEN") or "7084280622:AAGlwBy4FmMM3mc4OjjLQqa00Cg4t3jJzNg"
+CHANNEL_USERNAME = "@teazvpn"
+ADMIN_ID = 5542927340
+TRON_ADDRESS = "8030062261:AAFnC9AJ_2zvcaqC0LXe5Y3--d2FgxOx-fI"
+BANK_CARD = "6037 9975 9717 2684"
+
+RENDER_BASE_URL = os.getenv("RENDER_BASE_URL") or "https://teaz.onrender.com"
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-WEBHOOK_URL = f"https://sea-2ri6.onrender.com{WEBHOOK_PATH}"
-ADMIN_ID = 5542927340  # آیدی عددی ادمین
-DATA_FILE = "game_data.json"  # فایل ذخیره‌سازی داده‌ها
+WEBHOOK_URL = f"{RENDER_BASE_URL}{WEBHOOK_PATH}"
 
-# ⚙️ لاگ‌گیری
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
 
-# 📦 FastAPI app
 app = FastAPI()
-
-# 🎯 ساخت ربات تلگرام
 application = Application.builder().token(TOKEN).build()
 
-# 📌 تابع برای ذخیره‌سازی داده‌ها
-def save_data(context: ContextTypes.DEFAULT_TYPE):
+# ---------- PostgreSQL connection pool (psycopg2) ----------
+import psycopg2
+from psycopg2 import pool
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+db_pool: pool.ThreadedConnectionPool = None
+
+def init_db_pool():
+    global db_pool
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
     try:
-        data = {
-            "usernames": context.bot_data.get("usernames", {}),
-            "user_data": {str(user_id): data for user_id, data in context.bot_data.get("user_data", {}).items()}
-        }
-        with open(DATA_FILE, "w") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-        logger.info("Data saved successfully")
+        db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=DATABASE_URL)
+        logging.info("Database pool initialized successfully")
     except Exception as e:
-        logger.error(f"Error saving data: {e}")
+        logging.error(f"Failed to initialize database pool: {e}")
+        raise
 
-# 📌 تابع برای بارگذاری داده‌ها
-def load_data(context: ContextTypes.DEFAULT_TYPE):
+def close_db_pool():
+    global db_pool
+    if db_pool:
+        db_pool.closeall()
+        db_pool = None
+        logging.info("Database pool closed")
+
+def _db_execute_sync(query, params=(), fetch=False, fetchone=False, returning=False):
+    conn = None
+    cur = None
     try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, "r") as f:
-                data = json.load(f)
-                context.bot_data["usernames"] = data.get("usernames", {})
-                user_data = {}
-                for user_id_str, user_data_dict in data.get("user_data", {}).items():
-                    try:
-                        user_id = int(user_id_str)
-                        user_data[user_id] = user_data_dict
-                    except (ValueError, TypeError):
-                        continue
-                context.bot_data["user_data"] = user_data
-            logger.info("Data loaded successfully")
-        else:
-            context.bot_data["usernames"] = {}
-            context.bot_data["user_data"] = {}
-            logger.info("No data file found, initialized empty data structures")
+        conn = db_pool.getconn()
+        cur = conn.cursor()
+        cur.execute(query, params)
+        result = None
+        if returning:
+            result = cur.fetchone()[0] if cur.rowcount > 0 else None
+        elif fetchone:
+            result = cur.fetchone()
+        elif fetch:
+            result = cur.fetchall()
+        if not query.strip().lower().startswith("select"):
+            conn.commit()
+        return result
     except Exception as e:
-        logger.error(f"Error loading data: {e}")
-        context.bot_data["usernames"] = {}
-        context.bot_data["user_data"] = {}
+        logging.error(f"Database error in query '{query}' with params {params}: {e}")
+        raise
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            db_pool.putconn(conn)
 
-# 📌 هندلر برای /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or f"user_{user_id}"
-    
-    if "user_data" not in context.bot_data:
-        context.bot_data["user_data"] = {}
-    if "usernames" not in context.bot_data:
-        context.bot_data["usernames"] = {}
-    
-    if user_id not in context.bot_data["user_data"]:
-        context.bot_data["user_data"][user_id] = {
-            "state": "waiting_for_username",
-            "pending_gems": 0
-        }
-        await update.message.reply_text("🏴‍☠️ لطفاً اسمت رو به انگلیسی وارد کن (نباید تکراری باشه):")
-        save_data(context)
-        return
-    
-    user_data = context.bot_data["user_data"][user_id]
-    required_fields = {
-        "username": context.bot_data["usernames"].get(user_id, f"دزد دریایی {user_id}"),
-        "gems": 5,
-        "gold": 10,
-        "silver": 15,
-        "wins": 0,
-        "games": 0,
-        "energy": 100,
-        "last_purchase": {},
-        "score": 0,
-        "cannons": 0,
-        "free_cannons": 3,
-        "drones": 0,
-        "free_drones": 1,
-        "level": 1,
-        "initialized": True,
-        "attack_strategy": 50,
-        "defense_strategy": 50,
-        "current_strategy": "balanced",
-        "pending_gems": 0,
-        "state": None
-    }
-    
-    for field, default_value in required_fields.items():
-        if field not in user_data:
-            user_data[field] = default_value
-    
-    if user_data["username"] != context.bot_data["usernames"].get(user_id):
-        context.bot_data["usernames"][user_id] = user_data["username"]
-    
-    # Update level based on score
-    score = user_data.get("score", 0)
-    if score >= 600:
-        user_data["level"] = 5
-    elif score >= 450:
-        user_data["level"] = 4
-    elif score >= 300:
-        user_data["level"] = 3
-    elif score >= 150:
-        user_data["level"] = 2
-    else:
-        user_data["level"] = 1
-    
-    keyboard = [
-        ["⚔️ شروع بازی", "🛒 فروشگاه"],
-        ["🏴‍☠️ برترین ناخدایان"],
-        ["📕 اطلاعات کشتی", "⚡️ انرژی جنگجویان"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text(
-        f"🏴‍☠️ خوش اومدی به دنیای دزدان دریایی، {user_data['username']}!",
-        reply_markup=reply_markup
-    )
-    save_data(context)
+async def db_execute(query, params=(), fetch=False, fetchone=False, returning=False):
+    try:
+        return await asyncio.to_thread(_db_execute_sync, query, params, fetch, fetchone, returning)
+    except Exception as e:
+        logging.error(f"Async database error in query '{query}' with params {params}: {e}")
+        raise
 
-# 📌 هندلر برای دریافت نام کاربر
-async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    if "user_data" not in context.bot_data or user_id not in context.bot_data["user_data"]:
-        context.bot_data["user_data"][user_id] = {"state": "waiting_for_username"}
-    
-    user_data = context.bot_data["user_data"][user_id]
-    
-    if user_data.get("state") != "waiting_for_username":
-        return
-    
-    username = update.message.text.strip()
-    logger.info(f"User {user_id} entered username: {username}")
-    
-    if not username.isascii():
-        await update.message.reply_text("⛔ لطفاً اسم رو به انگلیسی وارد کن!")
-        return
-    
-    if "usernames" not in context.bot_data:
-        context.bot_data["usernames"] = {}
-    
-    if username.lower() in [u.lower() for u in context.bot_data["usernames"].values()]:
-        await update.message.reply_text("⛔ این اسم قبلاً انتخاب شده! یه اسم دیگه امتحان کن.")
-        return
-    
-    user_data["username"] = username
-    user_data["state"] = None
-    context.bot_data["usernames"][user_id] = username
-    
-    required_fields = {
-        "gems": 5,
-        "gold": 10,
-        "silver": 15,
-        "wins": 0,
-        "games": 0,
-        "energy": 100,
-        "last_purchase": {},
-        "score": 0,
-        "cannons": 0,
-        "free_cannons": 3,
-        "drones": 0,
-        "free_drones": 1,
-        "level": 1,
-        "initialized": True,
-        "attack_strategy": 50,
-        "defense_strategy": 50,
-        "current_strategy": "balanced",
-        "pending_gems": 0
-    }
-    
-    for field, default_value in required_fields.items():
-        if field not in user_data:
-            user_data[field] = default_value
-    
-    save_data(context)
-    await start(update, context)
+# ---------- ساخت و مهاجرت جداول ----------
+CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    user_id BIGINT PRIMARY KEY,
+    username TEXT,
+    balance BIGINT DEFAULT 0,
+    invited_by BIGINT,
+    phone TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_agent BOOLEAN DEFAULT FALSE
+)
+"""
+CREATE_PAYMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS payments (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
+    amount BIGINT,
+    status TEXT,
+    type TEXT,
+    payment_method TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+CREATE_SUBSCRIPTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT,
+    payment_id INTEGER,
+    plan TEXT,
+    config TEXT,
+    status TEXT DEFAULT 'pending',
+    start_date TIMESTAMP,
+    duration_days INTEGER
+)
+"""
+MIGRATE_SUBSCRIPTIONS_SQL = """
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS start_date TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS duration_days INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_agent BOOLEAN DEFAULT FALSE;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_method TEXT;
+UPDATE subscriptions SET start_date = COALESCE(start_date, CURRENT_TIMESTAMP),
+                        duration_days = CASE
+                            WHEN plan = '🥉۱ ماهه | ۹۰ هزار تومان | نامحدود' THEN 30
+                            WHEN plan = '🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود' THEN 90
+                            WHEN plan = '🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود' THEN 180
+                            WHEN plan = '🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود' THEN 30
+                            WHEN plan = '🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود' THEN 90
+                            WHEN plan = '🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود' THEN 180
+                            WHEN plan = '۱ ماهه: ۹۰ هزار تومان' THEN 30
+                            WHEN plan = '۳ ماهه: ۲۵۰ هزار تومان' THEN 90
+                            WHEN plan = '۶ ماهه: ۴۵۰ هزار تومان' THEN 180
+                            ELSE 30
+                        END
+WHERE start_date IS NULL OR duration_days IS NULL;
+"""
 
-# 📌 هندلر برای برترین ناخدایان
-async def top_captains(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data.get("user_data", {})
-    if not user_data:
-        await update.message.reply_text("🏴‍☠️ هنوز هیچ ناخدایی در بازی ثبت نشده!")
-        return
-    
-    sorted_players = sorted(
-        user_data.items(),
-        key=lambda x: x[1].get("score", 0),
-        reverse=True
-    )[:10]
-    
-    text = "🏴‍☠️ برترین ناخدایان:\n\n"
-    for i, (player_id, data) in enumerate(sorted_players, 1):
-        username = data.get("username", f"دزد دریایی {player_id}")
-        score = data.get("score", 0)
-        wins = data.get("wins", 0)
-        games = data.get("games", 0)
-        win_rate = (wins / games * 100) if games > 0 else 0
-        text += f"🌟 {i}. {username} - امتیاز: {score} - میانگین برد: {win_rate:.1f}%\n"
-        if player_id != user_id:
-            keyboard = [[InlineKeyboardButton("دعوت به جنگ دوستانه ✅", callback_data=f"request_friend_game_{player_id}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(text, reply_markup=reply_markup)
-            text = ""
-        else:
-            await update.message.reply_text(text)
-            text = ""
-    
-    save_data(context)
+async def create_tables():
+    try:
+        await db_execute(CREATE_USERS_SQL)
+        await db_execute(CREATE_PAYMENTS_SQL)
+        await db_execute(CREATE_SUBSCRIPTIONS_SQL)
+        await db_execute(MIGRATE_SUBSCRIPTIONS_SQL)
+        logging.info("Database tables created and migrated successfully")
+    except Exception as e:
+        logging.error(f"Error creating or migrating tables: {e}")
 
-# 📌 هندلر برای شروع بازی
-async def start_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = None
-    keyboard = [
-        ["دریانوردی ⛵️", "توپ ☄️"],
-        ["پهباد 🛩️", "استراتژی ⚔️"],
-        ["بازگشت به منو 🔙"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    await update.message.reply_text("⚓️ انتخاب کن:", reply_markup=reply_markup)
-    save_data(context)
-
-# 📌 هندلر برای استراتژی
-async def strategy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    keyboard = [
-        ["حمله گرایانه 🗡️", "دفاعی 🛡️"],
-        ["بازگشت به منو 🔙"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    
-    strategy_text = {
-        "aggressive": "حمله گرایانه 🗡️",
-        "defensive": "دفاعی 🛡️",
-        "balanced": "متوازن ⚖️"
-    }
-    
-    current_strategy = user_data.get("current_strategy", "balanced")
-    attack_power = user_data.get("attack_strategy", 50)
-    defense_power = user_data.get("defense_strategy", 50)
-    
-    text = (
-        f"⚔️ استراتژی فعلی: {strategy_text.get(current_strategy, 'متوازن ⚖️')}\n"
-        f"🗡️ قدرت حمله: {attack_power}%\n"
-        f"🛡️ قدرت دفاع: {defense_power}%\n\n"
-        "🌟 استراتژی جدید را انتخاب کنید:"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-    save_data(context)
-
-# 📌 هندلر برای تنظیم استراتژی
-async def set_strategy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    choice = update.message.text
-    user_data = context.bot_data["user_data"][user_id]
-    
-    if choice == "حمله گرایانه 🗡️":
-        keyboard = [
-            ["0%", "10%", "20%"],
-            ["35%", "50%", "65%"],
-            ["80%", "90%", "100%"],
-            ["بازگشت به منو 🔙"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        await update.message.reply_text("🗡️ میزان قدرت حمله را انتخاب کنید:", reply_markup=reply_markup)
-        user_data["state"] = "waiting_for_attack_strategy"
-    elif choice == "دفاعی 🛡️":
-        keyboard = [
-            ["0%", "10%", "20%"],
-            ["35%", "50%", "65%"],
-            ["80%", "90%", "100%"],
-            ["بازگشت به منو 🔙"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-        await update.message.reply_text("🛡️ میزان قدرت دفاع را انتخاب کنید:", reply_markup=reply_markup)
-        user_data["state"] = "waiting_for_defense_strategy"
-    elif choice == "بازگشت به منو 🔙":
-        await back_to_menu(update, context)
-    
-    save_data(context)
-
-# 📌 هندلر برای دریافت مقدار استراتژی
-async def handle_strategy_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"].get(user_id)
-    
-    if not user_data:
-        await update.message.reply_text("⛔ لطفاً اول با دستور /start شروع کنید!")
-        return
-    
-    state = user_data.get("state")
-    
-    if state not in ["waiting_for_attack_strategy", "waiting_for_defense_strategy"]:
+# ---------- دستور جدید برای نمایش شماره‌ها ----------
+async def numbers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
     
     try:
-        percent_str = update.message.text.replace("%", "")
-        value = int(percent_str)
-        if value < 0 or value > 100:
-            await update.message.reply_text("⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
+        users = await db_execute(
+            "SELECT user_id, username, phone FROM users ORDER BY created_at DESC",
+            fetch=True
+        )
+        if not users:
+            await update.message.reply_text("📂 هیچ کاربری یافت نشد.")
             return
-    except ValueError:
-        await update.message.reply_text("⛔ لطفاً یکی از گزینه‌های معتبر را انتخاب کنید!")
-        return
-    
-    if state == "waiting_for_attack_strategy":
-        user_data["attack_strategy"] = value
-        user_data["current_strategy"] = "aggressive" if value > 50 else "balanced"
-        await update.message.reply_text(f"✅ 🗡️ قدرت حمله {value}% ذخیره شد!")
-    elif state == "waiting_for_defense_strategy":
-        user_data["defense_strategy"] = value
-        user_data["current_strategy"] = "defensive" if value > 50 else "balanced"
-        await update.message.reply_text(f"✅ 🛡️ قدرت دفاع {value}% ذخیره شد!")
-    
-    user_data["state"] = None
-    save_data(context)
-    await strategy_menu(update, context)
 
-# 📌 تابع برای جست‌وجوی حریف
-async def search_opponent(update: Update, context: ContextTypes.DEFAULT_TYPE, cannons: int, energy: int, drones: int):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = "in_game"
-    # Remove the menu during gameplay
-    await update.message.reply_text(
-        "⛵️ در حال جست‌وجوی حریف... (تا ۶۰ ثانیه)",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    
-    # Simulate opponent search
-    await asyncio.sleep(5)  # Reduced wait time for testing; adjust to 60 for production
-    
-    opponent_id = None
-    if not opponent_id:
-        opponent_name = "دزد دریایی ناشناس"
-    else:
-        opponent_name = context.bot_data["usernames"].get(opponent_id, "ناشناس")
-    
-    opponent_cannons = random.randint(0, 3)
-    opponent_drones = random.randint(0, 1)  # Opponent can have 0 or 1 drone
-    
-    # Call send_game_reports to display battle messages
-    await send_game_reports(update, context, opponent_name, cannons, energy, opponent_cannons, drones, opponent_drones)
-    
-    context.bot_data["user_data"][user_id]["state"] = None
-    save_data(context)
-    # Restore the main menu after game ends
-    await start(update, context)
+        response = "📞 لیست شماره‌های کاربران:\n\n"
+        for user in users:
+            user_id, username, phone = user
+            username_display = f"@{username}" if username else f"ID: {user_id}"
+            phone_display = phone if phone else "نامشخص"
+            response += f"کاربر: {username_display}\n"
+            response += f"شماره: {phone_display}\n"
+            response += "--------------------\n"
 
-# 📌 تابع برای ارسال گزارش‌های بازی
-async def send_game_reports(update: Update, context: ContextTypes.DEFAULT_TYPE, opponent_name: str, cannons: int, energy: int, opponent_cannons: int, drones: int, opponent_drones: int):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"].get(user_id)
-    
-    if not user_data:
-        await update.message.reply_text("⛔ خطا: اطلاعات کاربر یافت نشد!")
+        await send_long_message(
+            update.effective_user.id,
+            response,
+            context,
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        logging.error(f"Error in numbers_command: {e}")
+        await update.message.reply_text("⚠️ خطایی در نمایش شماره‌ها رخ داد. لطفاً دوباره تلاش کنید.")
+
+# ---------- دستور آمار ربات ----------
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
-    
-    attack_power = user_data.get("attack_strategy", 50)
-    defense_power = user_data.get("defense_strategy", 50)
-    
-    battle_reports = [
-        "🏴‍☠️ ناخدا، کشتی دشمن از مه بیرون اومد! آماده نبرد شو! ⚔️",
-        "⚔️ نیروهای دشمن با طناب به کشتی‌مون چنگ زدن! شمشیرها رو آماده کن! 🗡️",
-        "💥 با یه شلیک توپ، عرشه دشمن شعله‌ور شد! 🔥",
-        "⛵️ دشمن داره از پهلو نزدیک می‌شه! دفاع رو تقویت کن! 🛡️",
-        "🗡️ ناخدا، ۳ نفر از خدمه دشمن رو با شمشیر انداختیم تو دریا! 🌊",
-        "🌊 یه موج بزرگ کشتی دشمن رو تکون داد، حالا شانس ماست! 🎉",
-        "☄️ توپچی‌ها شلیک کردن، ۲ نفر از دشمن کشته شدن! 💀",
-        "🪵 دشمن با یه تخته چوبی داره به کشتی‌مون می‌پره! 🚢",
-        "🌫️ ناخدا، یه بمب دودزا از کشتی دشمن اومد، دید کم شده! 👀",
-        "⚔️ با حمله ناگهانی، ۴ نفر از اونا رو نابود کردیم! 💪",
-        "💥 کشتی دشمن داره غرق می‌شه، یه شلیک دیگه بزن! ☄️",
-        "🏹 نیروهای دشمن تو عرشه‌مون نفوذ کردن، به جنگشون برو! ⚔️",
-        "🏹 یه تیر آرشه از کشتی دشمن اومد، یکی از خدمه زخمی شد! 😞",
-        "🪓 ناخدا، با یه ضربه تبر، ۳ نفر از اونا رو نابود کردیم! 💥",
-        "⛵️ دشمن داره فرار می‌کنه، تعقیبشون کنیم! 🚢",
-        "💥 یه انفجار تو کشتی دشمن، ۵ نفرشون از بین رفتن! 🔥",
-        "🌪️ ناخدا، طوفان داره به نفع ما می‌چرخه! 🌊",
-        "🔪 دشمن با چاقو به سمت خدمه‌مون حمله کرد، ۲ نفر کشته شدن! 💀",
-        "🌳 با شلیک دقیق، دکل دشمن شکسته شد! ⛵️",
-        "🏴‍☠️ نیروهای دشمن دارن تسلیم می‌شن، جلو برو! ⚔️",
-        "🪢 ناخدا، یه گروه از اونا با قایق به کشتی‌مون چسبیدن! 🚤",
-        "🗡️ با شمشیر هامون، ۶ نفر از اونا رو به زانو درآوردیم! 💪",
-        "🌫️ دشمن داره از دود استفاده می‌کنه، مراقب باش! 👀",
-        "💥 با شلیک توپ، عرشه دشمن نابود شد! 🔥",
-        "🔫 ناخدا، ۴ نفر از خدمه دشمن رو با تفنگ زدیم! 💥",
-        "⛵️ کشتی دشمن داره می‌لرزه، شانس ماست! 🎉",
-        "🪢 دشمن با یه طناب بزرگ داره به کشتی‌مون میاد! 🚢",
-        "🗡️ ناخدا، با یه ضربه، ۵ نفر از اونا رو کشتیم! 💀",
-        "🌊 یه موج، قایق دشمن رو واژگون کرد! ⛵️",
-        "🎯 دشمن داره با نیزه حمله می‌کنه، دفاع کن! 🛡️",
-        "💥 با شلیک توپ، ۳ نفر از اونا تو دریا غرق شدن! 🌊",
-        "🏚️ ناخدا، یه گروه کوچک از دشمن تو انبار پنهان شدن! 👀",
-        "💣 دشمن با باروت حمله می‌کنه، عقب‌نشینی کن! ⚠️",
-        "🪓 با تبر هامون، ۷ نفر از اونا رو از بین بردیم! 💪",
-        "🔥 کشتی دشمن داره آتش می‌گیره، ادامه بده! ⛵️",
-        "🏹 ناخدا، یه تیر کمان به بادبانمون خورد! 😞",
-        "🪵 دشمن با یه تخته چوب داره به عرشه می‌پره! 🚢",
-        "🔫 با شلیک، ۴ نفر از خدمه دشمن کشته شدن! 💥",
-        "🌪️ ناخدا، طوفان داره کشتی دشمن رو نابود می‌کنه! 🌊",
-        "🔪 دشمن داره با شمشیر به سمت ما می‌دوه! ⚔️",
-        "🗡️ با یه ضربه قوی، ۶ نفر از اونا رو نابود کردیم! 💪",
-        "💥 کشتی دشمن داره غرق می‌شه، شلیک دیگه‌ای بزن! ☄️",
-        "🏹 ناخدا، یه گروه از اونا دارن از پشت حمله می‌کنن! ⚠️",
-        "🔫 با تفنگ، ۳ نفر از دشمن رو از پای درآوردیم! 💥",
-        "🌫️ دشمن داره با دود غلیظ ما رو گیج می‌کنه! 👀",
-        "💥 با شلیک، ۵ نفر از خدمه دشمن غرق شدن! 🌊",
-        "🌊 ناخدا، یه موج بزرگ کشتی دشمن رو واژگون کرد! ⛵️",
-        "🎯 دشمن با نیزه به سمت عرشه میاد! 🛡️",
-        "🗡️ با شمشیر، ۷ نفر از اونا رو نابود کردیم! 💪",
-        "🔥 کشتی دشمن داره می‌سوزه، شانس ماست! 🎉",
-        "🏚️ ناخدا، یه گروه از اونا تو زیرزمین پنهان شدن! 👀",
-        "💣 دشمن با باروت به ما حمله می‌کنه! ⚠️",
-        "🪓 با تبر، ۴ نفر از اونا رو از پای درآوردیم! 💥",
-        "🌪️ ناخدا، طوفان داره کشتی‌مون رو نجات می‌ده! 🌊",
-        "🔪 دشمن با چاقو به خدمه حمله می‌کنه! ⚔️",
-        "💥 با شلیک توپ، ۶ نفر از اونا کشته شدن! ☄️",
-        "⛵️ کشتی دشمن داره غرق می‌شه، تعقیب کن! 🚢",
-        "🏹 ناخدا، یه تیر کمان به دکل دشمن خورد! 💥",
-        "🪵 دشمن با تخته چوب به عرشه می‌پره! 🚢",
-        "🔫 با تفنگ، ۵ نفر از اونا رو نابود کردیم! 💪",
-        "🔥 ناخدا، یه انفجار تو انبار دشمن رخ داد! 💥",
-        "🪢 دشمن با طناب به دکل ما چسبیده! 🚢",
-        "🗡️ با شمشیر، ۸ نفر از اونا رو به دریا انداختیم! 🌊",
-        "🔥 کشتی دشمن داره می‌شکنه، شانس ماست! 🎉",
-        "🌪️ ناخدا، طوفان به نفع ما می‌چرخه! 🌊",
-        "🎯 دشمن با نیزه به سمت ما حمله می‌کنه! 🛡️",
-        "💥 با شلیک، ۴ نفر از اونا کشته شدن! 💀",
-        "🌊 ناخدا، یه موج بزرگ دشمن رو غرق کرد! ⛵️",
-        "🌫️ دشمن با دود داره ما رو گیج می‌کنه! 👀",
-        "🪓 با تبر، ۶ نفر از اونا رو از بین بردیم! 💪",
-        "🔥 کشتی دشمن داره می‌سوزه، ادامه بده! ⛵️",
-        "🏹 ناخدا، یه تیر آرشه به دشمن برخورد کرد! 💥",
-        "🌫️ دشمن با بمب دودزا ما رو محاصره می‌کنه! ⚠️",
-        "💥 با توپ، ۵ نفر از اونا غرق شدن! 🌊",
-        "🌪️ ناخدا، طوفان دشمن رو نابود می‌کنه! 🌊",
-        "🔪 دشمن با چاقو به خدمه‌مون حمله کرد! ⚔️",
-        "💥 با شلیک، ۷ نفر از اونا رو نابود کردیم!"  # خط اصلاح‌شده
-    ]
-    
-    num_reports = random.randint(6, 20)
-    selected_messages = random.sample(battle_reports, min(num_reports, len(battle_reports)))
-    
-    # Add drone-specific messages
-    for i in range(drones):
-        hit_chance = 0.9  # Drones have high hit chance
-        hit = random.random() < hit_chance
-        selected_messages.append(f"🛩️ پهباد {i+1} ما شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}")
-    
-    for i in range(opponent_drones):
-        hit_chance = 0.9
-        hit = random.random() < hit_chance
-        selected_messages.append(f"🛩️ پهباد {i+1} دشمن شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}")
-    
-    total_duration = 60
-    interval = total_duration / len(selected_messages)
-    
-    for msg in selected_messages:
-        try:
-            await update.message.reply_text(msg)
-            await asyncio.sleep(interval)
-        except Exception as e:
-            logger.error(f"Error sending game report: {e}")
-    
-    base_win_chance = min(100, (cannons * 20) + (energy / 2) + (drones * 50))  # Drones add significant win chance
-    strategy_bonus = (attack_power - 50) * 0.5
-    win_chance = min(100, base_win_chance + strategy_bonus)
-    
-    opponent_chance = random.uniform(20, 80) + (opponent_drones * 50)
-    win = random.random() * 100 < win_chance
-    
-    report = "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔" if not win else "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆"
-    context.bot_data["user_data"][user_id]["games"] += 1
-    context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 5)
-    context.bot_data["user_data"][user_id]["cannons"] = max(0, context.bot_data["user_data"][user_id]["cannons"] - cannons)
-    context.bot_data["user_data"][user_id]["drones"] = max(0, context.bot_data["user_data"][user_id]["drones"] - drones)
-    
-    if win:
-        context.bot_data["user_data"][user_id]["wins"] += 1
-        context.bot_data["user_data"][user_id]["score"] += 30
-        context.bot_data["user_data"][user_id]["gold"] += 3
-        context.bot_data["user_data"][user_id]["silver"] += 5
-        context.bot_data["user_data"][user_id]["energy"] = min(100, context.bot_data["user_data"][user_id]["energy"] + 10)
-        if random.random() < 0.25:
-            context.bot_data["user_data"][user_id]["gems"] += 1
-            report += "\n💎 یه جم پیدا کردیم! 🎉"
-        report += "\n🏆 جایزه: ۳۰ امتیاز, 3 🪙 کیسه طلا, 5 🥈 شمش نقره, +10% ⚡ انرژی"
-    else:
-        context.bot_data["user_data"][user_id]["score"] = max(0, context.bot_data["user_data"][user_id]["score"] - 10)
-        if context.bot_data["user_data"][user_id]["gold"] >= 3:
-            context.bot_data["user_data"][user_id]["gold"] -= 3
-        if context.bot_data["user_data"][user_id]["silver"] >= 5:
-            context.bot_data["user_data"][user_id]["silver"] -= 5
-        if random.random() < 0.25 and context.bot_data["user_data"][user_id]["gems"] >= 1:
-            context.bot_data["user_data"][user_id]["gems"] -= 1
-            report += "\n💎 یه جم از دست دادیم! 😢"
-        context.bot_data["user_data"][user_id]["energy"] = max(0, context.bot_data["user_data"][user_id]["energy"] - 30)
-        report += "\n⛔ جریمه: -10 امتیاز, -3 🪙 کیسه طلا, -5 🥈 شمش نقره, -30% ⚡ انرژی"
     
     try:
-        await update.message.reply_text(f"⚔️ بازی با {opponent_name}:\n{report}")
+        total_users = await db_execute("SELECT COUNT(*) FROM users", fetchone=True)
+        active_users = await db_execute("SELECT COUNT(DISTINCT user_id) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL", fetchone=True)
+        inactive_users = total_users[0] - active_users[0] if total_users and active_users else 0
+        today_users = await db_execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= CURRENT_DATE", 
+            fetchone=True
+        )
+        
+        today_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= CURRENT_DATE",
+            fetchone=True
+        )
+        month_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= DATE_TRUNC('month', CURRENT_DATE)",
+            fetchone=True
+        )
+        total_income = await db_execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'",
+            fetchone=True
+        )
+        
+        plan_stats = await db_execute(
+            "SELECT plan, COUNT(*) as count FROM subscriptions WHERE config IS NOT NULL AND status = 'active' GROUP BY plan ORDER BY count DESC",
+            fetch=True
+        )
+        best_selling_plan = plan_stats[0] if plan_stats else ("هیچ پلنی", 0)
+        
+        payment_methods = await db_execute(
+            "SELECT payment_method, COUNT(*) as count FROM payments WHERE status = 'approved' GROUP BY payment_method",
+            fetch=True
+        )
+        total_payments = sum([pm[1] for pm in payment_methods]) if payment_methods else 1
+        payment_methods_percent = [
+            (pm[0], round((pm[1] / total_payments) * 100, 1)) 
+            for pm in payment_methods
+            if pm[0] in ["card_to_card", "tron", "balance"]
+        ] if payment_methods else [("کارت به کارت", 0), ("ترون", 0), ("موجودی", 0)]
+        
+        method_names = {
+            "card_to_card": "🏦 کارت به کارت",
+            "tron": "💎 ترون",
+            "balance": "💰 موجودی"
+        }
+        
+        total_subs = await db_execute(
+            "SELECT COUNT(*) FROM subscriptions",
+            fetchone=True
+        )
+        active_subs = await db_execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND config IS NOT NULL",
+            fetchone=True
+        )
+        pending_subs = await db_execute(
+            "SELECT COUNT(*) FROM payments WHERE status = 'pending' AND type = 'buy_subscription'",
+            fetchone=True
+        )
+        total_transactions = await db_execute(
+            "SELECT COUNT(*) FROM payments",
+            fetchone=True
+        )
+        
+        invited_users = await db_execute(
+            "SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL",
+            fetchone=True
+        )
+        
+        stats_message = "🌟 گزارش عملکرد تیز VPN 🚀\n\n"
+        stats_message += "👥 کاربران:\n"
+        stats_message += f"  • کل کاربران: {total_users[0] if total_users else 0:,} نفر 🧑‍💻\n"
+        stats_message += f"  • کاربران فعال: {active_users[0] if active_users else 0:,} نفر ✅\n"
+        stats_message += f"  • کاربران غیرفعال: {inactive_users:,} نفر ❎\n"
+        stats_message += f"  • کاربران جدید امروز: {today_users[0] if today_users else 0:,} نفر 🆕\n"
+        stats_message += f"  • کاربران دعوت‌شده: {invited_users[0] if invited_users else 0:,} نفر 🤝\n\n"
+        
+        stats_message += "💸 درآمد:\n"
+        stats_message += f"  • امروز: {today_income[0] if today_income else 0:,} تومان 💰\n"
+        stats_message += f"  • این ماه: {month_income[0] if month_income else 0:,} تومان 📈\n"
+        stats_message += f"  • کل درآمد: {total_income[0] if total_income else 0:,} تومان 🔥\n\n"
+        
+        stats_message += "📦 اشتراک‌ها:\n"
+        stats_message += f"  • کل اشتراک‌ها: {total_subs[0] if total_subs else 0:,} عدد 📋\n"
+        stats_message += f"  • اشتراک‌های فعال: {active_subs[0] if active_subs else 0:,} عدد 🟢\n"
+        stats_message += f"  • اشتراک‌های در انتظار: {pending_subs[0] if pending_subs else 0:,} عدد ⏳\n"
+        stats_message += f"  • پرفروش‌ترین پلن: {best_selling_plan[0]} ({best_selling_plan[1]:,} عدد) 🏆\n\n"
+        
+        stats_message += "💳 روش‌های پرداخت:\n"
+        for method, percent in payment_methods_percent:
+            display_name = method_names.get(method, method)
+            stats_message += f"  • {display_name}: {percent}% 💸\n"
+        stats_message += f"  • کل تراکنش‌ها: {total_transactions[0] if total_transactions else 0:,} عدد 🔄\n"
+        
+        await update.message.reply_text(stats_message)
+        
     except Exception as e:
-        logger.error(f"Error sending final report: {e}")
-    
-    save_data(context)
+        logging.error(f"Error generating stats: {e}")
+        await update.message.reply_text("⚠️ خطایی در نمایش آمار رخ داد. لطفاً دوباره تلاش کنید.")
 
-# 📌 هندلر برای پردازش بازی و خرید توپ و پهباد
-async def handle_game_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    choice = update.message.text
-    if choice == "بازگشت به منو 🔙":
-        await back_to_menu(update, context)
+# ---------- پاک کردن دیتابیس ----------
+async def clear_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
         return
-    
-    if choice == "دریانوردی ⛵️":
-        if context.bot_data["user_data"][user_id]["state"] == "in_game":
-            await update.message.reply_text("⛵️ در حال بازی هستید! لطفاً تا پایان بازی صبر کنید.")
-            return
-        cannons = context.bot_data["user_data"][user_id]["cannons"]
-        energy = context.bot_data["user_data"][user_id]["energy"]
-        drones = context.bot_data["user_data"][user_id]["drones"]
-        asyncio.create_task(search_opponent(update, context, cannons, energy, drones))
-    
-    elif choice == "توپ ☄️":
-        free_cannons = context.bot_data["user_data"][user_id]["free_cannons"]
-        if free_cannons > 0:
-            context.bot_data["user_data"][user_id]["cannons"] += 1
-            context.bot_data["user_data"][user_id]["free_cannons"] -= 1
-            await update.message.reply_text(f"☄️ یه توپ رایگان گرفتی! ({free_cannons - 1} توپ رایگان باقی مونده)")
-        else:
-            await update.message.reply_text("☄️ توپ رایگان تموم شده! برای خرید توپ به فروشگاه برو:")
-            await shop(update, context)
-        save_data(context)
-    
-    elif choice == "پهباد 🛩️":
-        free_drones = context.bot_data["user_data"][user_id]["free_drones"]
-        if free_drones > 0:
-            context.bot_data["user_data"][user_id]["drones"] += 1
-            context.bot_data["user_data"][user_id]["free_drones"] -= 1
-            await update.message.reply_text(f"🛩️ یه پهباد رایگان گرفتی! ({free_drones - 1} پهباد رایگان باقی مونده)")
-        else:
-            await update.message.reply_text("🛩️ پهباد رایگان تموم شده! برای خرید پهباد به فروشگاه برو:")
-            await shop(update, context)
-        save_data(context)
-    
-    elif choice == "استراتژی ⚔️":
-        await strategy_menu(update, context)
-    
-    elif choice in ["حمله گرایانه 🗡️", "دفاعی 🛡️"]:
-        await set_strategy(update, context)
+    try:
+        await db_execute("DELETE FROM subscriptions")
+        await db_execute("DELETE FROM payments")
+        await db_execute("DELETE FROM users")
+        logging.info("Database cleared successfully by admin")
+        await update.message.reply_text("✅ دیتابیس با موفقیت پاک شد.")
+    except Exception as e:
+        logging.error(f"Error clearing database: {e}")
+        await update.message.reply_text(f"⚠️ خطا در پاک کردن دیتابیس: {str(e)}")
 
-# 📌 هندلر برای خرید توپ
-async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    if query.data == "buy_cannon_gem":
-        if context.bot_data["user_data"][user_id]["gems"] >= 1:
-            context.bot_data["user_data"][user_id]["gems"] -= 1
-            context.bot_data["user_data"][user_id]["cannons"] += 1
-            await query.message.reply_text("☄️ 💎 یه توپ با ۱ جم خریدی!")
-        else:
-            await query.message.reply_text("⛔ 💎 جم کافی نداری!")
-    elif query.data == "buy_cannon_gold":
-        if context.bot_data["user_data"][user_id]["gold"] >= 5:
-            context.bot_data["user_data"][user_id]["gold"] -= 5
-            context.bot_data["user_data"][user_id]["cannons"] += 1
-            await query.message.reply_text("☄️ 🪙 یه توپ با ۵ کیسه طلا خریدی!")
-        else:
-            await query.message.reply_text("⛔ 🪙 کیسه طلا کافی نداری!")
-    await query.message.delete()
-    save_data(context)
+# ---------- کیبوردها ----------
+def get_main_keyboard():
+    keyboard = [
+        [KeyboardButton("💰 موجودی"), KeyboardButton("💳 خرید اشتراک")],
+        [KeyboardButton("🎁 اشتراک تست رایگان"), KeyboardButton("☎️ پشتیبانی")],
+        [KeyboardButton("💵 اعتبار رایگان"), KeyboardButton("📂 اشتراک‌های من")],
+        [KeyboardButton("💡 راهنمای اتصال"), KeyboardButton("🧑‍💼 درخواست نمایندگی")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# 📌 هندلر برای پردازش درخواست جنگ دوستانه
-async def handle_friend_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    if data == "back_to_menu":
-        await back_to_menu(update, context)
-        return
-    
-    if data.startswith("request_friend_game_"):
-        target_id = int(data.split("_")[3])
-        requester_id = query.from_user.id
-        requester_data = context.bot_data["user_data"].get(requester_id, {})
-        requester_name = requester_data.get("username", f"دزد دریایی {requester_id}")
-        
-        gems = requester_data.get("gems", 5)
-        gold = requester_data.get("gold", 10)
-        silver = requester_data.get("silver", 15)
-        wins = requester_data.get("wins", 0)
-        games = requester_data.get("games", 0)
-        energy = requester_data.get("energy", 100)
-        win_rate = (wins / games * 100) if games > 0 else 0
-        
-        text = (
-            f"🏴‍☠️ کاربر {requester_name} با این اطلاعات کشتی بهت درخواست جنگ دوستانه داده! قبول می‌کنی? ⚔️\n"
-            f"📕 اطلاعات کشتی {requester_name}:\n"
-            f"💎 جم: {gems}\n"
-            f"🪙 کیسه طلا: {gold}\n"
-            f"🥈 شمش نقره: {silver}\n"
-            f"🏆 میانگین پیروزی: {win_rate:.1f}%\n"
-            f"⚡ انرژی: {energy}%"
-        )
-        
+def get_balance_keyboard():
+    keyboard = [
+        [KeyboardButton("نمایش موجودی"), KeyboardButton("افزایش موجودی")],
+        [KeyboardButton("بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_back_keyboard():
+    return ReplyKeyboardMarkup([[KeyboardButton("⬅️ بازگشت به منو")]], resize_keyboard=True)
+
+def get_subscription_keyboard(is_agent=False):
+    if is_agent:
         keyboard = [
-            [InlineKeyboardButton("قبول می‌کنم ✅", callback_data=f"accept_friend_game_{requester_id}_{target_id}")],
-            [InlineKeyboardButton("قبول نمی‌کنم ❌", callback_data=f"reject_friend_game_{requester_id}")]
+            [KeyboardButton("🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود")],
+            [KeyboardButton("⬅️ بازگشت به منو")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(target_id, text, reply_markup=reply_markup)
-        await query.message.reply_text(f"⚔️ درخواست جنگ دوستانه برای {context.bot_data['usernames'].get(target_id, 'ناشناس')} ارسال شد! ⏳")
-        await query.message.delete()
-        save_data(context)
-        return
-    
-    if data.startswith("reject_friend_game_"):
-        requester_id = int(data.split("_")[3])
-        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
-        await query.message.reply_text("⛔ درخواست جنگ دوستانه رد شد! 😞")
-        await context.bot.send_message(requester_id, f"🏴‍☠️ کاربر {context.bot_data['usernames'].get(query.from_user.id, 'ناشناس')} درخواست جنگ دوستانه‌ات رو رد کرد! ⚠️")
-        await query.message.edit_reply_markup(reply_markup=None)
-        save_data(context)
-        return
-    
-    if data.startswith("accept_friend_game_"):
-        requester_id, target_id = map(int, data.split("_")[3:5])
-        requester_name = context.bot_data["usernames"].get(requester_id, f"دزد دریایی {requester_id}")
-        target_name = context.bot_data["usernames"].get(target_id, f"دزد دریایی {target_id}")
-        
-        requester_data = context.bot_data["user_data"].get(requester_id, {})
-        target_data = context.bot_data["user_data"].get(target_id, {})
-        
-        requester_cannons = requester_data.get("cannons", 0)
-        requester_energy = requester_data.get("energy", 100)
-        requester_attack = requester_data.get("attack_strategy", 50)
-        requester_defense = requester_data.get("defense_strategy", 50)
-        requester_drones = requester_data.get("drones", 0)
-        
-        target_cannons = target_data.get("cannons", 0)
-        target_energy = target_data.get("energy", 100)
-        target_attack = target_data.get("attack_strategy", 50)
-        target_defense = target_data.get("defense_strategy", 50)
-        target_drones = target_data.get("drones", 0)
-        
-        requester_chance = min(100, (requester_cannons * 20) + (requester_energy / 2) + (requester_drones * 50))
-        requester_chance += (requester_attack - 50) * 0.5
-        
-        target_chance = min(100, (target_cannons * 20) + (target_energy / 2) + (target_drones * 50))
-        target_chance += (target_attack - 50) * 0.5
-        
-        requester_chance -= (target_defense / 100) * 30
-        target_chance -= (requester_defense / 100) * 30
-        
-        win = random.random() * (requester_chance + target_chance) < requester_chance
-        
-        requester_data["games"] = requester_data.get("games", 0) + 1
-        target_data["games"] = target_data.get("games", 0) + 1
-        requester_data["energy"] = max(0, requester_data.get("energy", 100) - 5)
-        target_data["energy"] = max(0, target_data.get("energy", 100) - 5)
-        requester_data["cannons"] = max(0, requester_data.get("cannons", 0) - requester_cannons)
-        target_data["cannons"] = max(0, target_data.get("cannons", 0) - target_cannons)
-        requester_data["drones"] = max(0, requester_data.get("drones", 0) - requester_drones)
-        target_data["drones"] = max(0, target_data.get("drones", 0) - target_drones)
-        
-        requester_report = f"⚔️ بازی دوستانه با {target_name}:\n"
-        target_report = f"⚔️ بازی دوستانه با {requester_name}:\n"
-        
-        if win:
-            requester_data["wins"] = requester_data.get("wins", 0) + 1
-            requester_data["score"] = requester_data.get("score", 0) + 30
-            target_data["score"] = max(0, target_data.get("score", 0) - 10)
-            requester_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉"
-            target_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞"
-        else:
-            target_data["wins"] = target_data.get("wins", 0) + 1
-            target_data["score"] = target_data.get("score", 0) + 30
-            requester_data["score"] = max(0, requester_data.get("score", 0) - 10)
-            target_report += "🏴‍☠️ کاپیتان، دشمن رو غرق کردیم! 🏆 🎉"
-            requester_report += "🏴‍☠️ کاپیتان، کشتیمون سوراخ شد! ⛔ 😞"
-        
-        messages = [
-            "🏴‍☠️ نبرد دوستانه آغاز شد! کشتی‌ها در افق به هم نزدیک می‌شن! ⚔️",
-            "🌊 طوفان در راهه! دریا داره خشمگین می‌شه! 🌪️",
-            f"⚡ جنگجویان شما با انرژی {requester_energy}% آماده‌اند! 💪",
-            f"⚡ جنگجویان حریف با انرژی {target_energy}% آماده‌اند! 💪"
-        ]
-        
-        for i in range(requester_cannons):
-            hit_chance = 0.5 * (requester_attack / 100)
-            hit = random.random() < hit_chance
-            messages.append(f"☄️ شلیک توپ {i+1} از {requester_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}")
-        
-        for i in range(target_cannons):
-            hit_chance = 0.5 * (target_attack / 100)
-            defense_reduction = (requester_defense / 100) * 0.3
-            hit = random.random() < (hit_chance - defense_reduction)
-            messages.append(f"☄️ شلیک توپ {i+1} از {target_name}! {'برخورد کرد! 💥' if hit else 'خطا رفت! 😞'}")
-        
-        for i in range(requester_drones):
-            hit_chance = 0.9
-            hit = random.random() < hit_chance
-            messages.append(f"🛩️ پهباد {i+1} از {requester_name} شلیک کرد! {'برخورد کرد و خسارت سنگین وارد کرد! 💥' if hit else 'خطا رفت! 😞'}")
-        
-        for i in range(target_drones):
-            hit_chance = 0.9
-            defense_reduction = (requester_defense / 100) * 0.3
-            hit = random.random() < (hit_chance - defense_reduction)
-            messages.append(f"🛩️ پهباد {i+1} از {target_name} شلیک کرد! {'برخورد کرد و خسارت وارد کرد! 😞' if hit else 'خطا رفت! 🎉'}")
-        
-        num_reports = random.randint(5, 10)
-        selected_messages = random.sample(messages, min(num_reports, len(messages)))
-        total_duration = 30
-        interval = total_duration / len(selected_messages)
-        
-        for msg in selected_messages:
-            await context.bot.send_message(requester_id, msg)
-            await context.bot.send_message(target_id, msg)
-            await asyncio.sleep(interval)
-        
-        await context.bot.send_message(requester_id, requester_report)
-        await query.message.reply_text(target_report)
-        await query.message.edit_reply_markup(reply_markup=None)
-        save_data(context)
-
-# 📌 هندلر برای بازگشت به منو
-async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.callback_query.from_user.id if update.callback_query else update.message.from_user.id
-    context.bot_data["user_data"][user_id]["state"] = None
-    await start(update, context)
-    if update.callback_query:
-        await update.callback_query.message.delete()
-
-# 📌 هندلر برای فروشگاه
-async def shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    keyboard = [
-        ["💎 خرید جم", "☄️ خرید توپ"],
-        ["🛩️ خرید پهباد", "🔙 بازگشت به منو"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-    
-    text = (
-        "🛒 فروشگاه دزدان دریایی 🌊\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}\n"
-        f"🪙 کیسه طلا: {user_data.get('gold', 0)}\n"
-        f"🥈 شمش نقره: {user_data.get('silver', 0)}\n\n"
-        "🌟 گزینه مورد نظر را انتخاب کنید:"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید جم
-async def buy_gems(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    context.bot_data["user_data"][user_id]["pending_gems"] = 0
-    
-    keyboard = [
-        [InlineKeyboardButton("25 جم - 5 ترون", callback_data="buy_25_gems")],
-        [InlineKeyboardButton("50 جم - 8 ترون", callback_data="buy_50_gems")],
-        [InlineKeyboardButton("100 جم - 14 ترون", callback_data="buy_100_gems")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        "💎 خرید جم:\n\n"
-        "1. 25 جم = 5 ترون\n"
-        "2. 50 جم = 8 ترون\n"
-        "3. 100 جم = 14 ترون\n\n"
-        "آدرس ترون: TJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb\n\n"
-        "پس از پرداخت، فیش پرداخت را ارسال کنید."
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید توپ
-async def buy_cannons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("1 توپ - 3 جم", callback_data="buy_1_cannon")],
-        [InlineKeyboardButton("3 توپ - 7 جم", callback_data="buy_3_cannons")],
-        [InlineKeyboardButton("10 توپ - 18 جم", callback_data="buy_10_cannons")],
-        [InlineKeyboardButton("20 توپ - 30 جم", callback_data="buy_20_cannons")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    text = (
-        f"☄️ خرید توپ (توپ‌های فعلی: {user_data.get('cannons', 0)})\n\n"
-        "1. 1 توپ = 3 جم\n"
-        "2. 3 توپ = 7 جم (صرفه‌جویی 2 جم)\n"
-        "3. 10 توپ = 18 جم (صرفه‌جویی 12 جم)\n"
-        "4. 20 توپ = 30 جم (صرفه‌جویی 30 جم)\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای خرید پهباد
-async def buy_drones(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("1 پهباد - 7 جم", callback_data="buy_1_drone")],
-        [InlineKeyboardButton("3 پهباد - 18 جم", callback_data="buy_3_drones")],
-        [InlineKeyboardButton("5 پهباد - 30 جم", callback_data="buy_5_drones")],
-        [InlineKeyboardButton("🔙 بازگشت به فروشگاه", callback_data="back_to_shop")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    
-    text = (
-        f"🛩️ خرید پهباد (پهبادهای فعلی: {user_data.get('drones', 0)})\n\n"
-        "1. 1 پهباد = 7 جم\n"
-        "2. 3 پهباد = 18 جم (صرفه‌جویی 3 جم)\n"
-        "3. 5 پهباد = 30 جم (صرفه‌جویی 5 جم)\n\n"
-        f"💎 جم های شما: {user_data.get('gems', 0)}"
-    )
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
-
-# 📌 هندلر برای پردازش خرید توپ
-async def handle_cannon_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    user_data = context.bot_data["user_data"][user_id]
-    gems = user_data.get("gems", 0)
-    
-    if query.data == "buy_1_cannon":
-        if gems >= 3:
-            user_data["gems"] -= 3
-            user_data["cannons"] += 1
-            await query.message.reply_text("✅ 1 توپ با 3 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_3_cannons":
-        if gems >= 7:
-            user_data["gems"] -= 7
-            user_data["cannons"] += 3
-            await query.message.reply_text("✅ 3 توپ با 7 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_10_cannons":
-        if gems >= 18:
-            user_data["gems"] -= 18
-            user_data["cannons"] += 10
-            await query.message.reply_text("✅ 10 توپ با 18 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_20_cannons":
-        if gems >= 30:
-            user_data["gems"] -= 30
-            user_data["cannons"] += 20
-            await query.message.reply_text("✅ 20 توپ با 30 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    save_data(context)
-    await buy_cannons(update, context)
-
-# 📌 هندلر برای پردازش خرید پهباد
-async def handle_drone_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    user_data = context.bot_data["user_data"][user_id]
-    gems = user_data.get("gems", 0)
-    
-    if query.data == "buy_1_drone":
-        if gems >= 7:
-            user_data["gems"] -= 7
-            user_data["drones"] += 1
-            await query.message.reply_text("✅ 1 پهباد با 7 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_3_drones":
-        if gems >= 18:
-            user_data["gems"] -= 18
-            user_data["drones"] += 3
-            await query.message.reply_text("✅ 3 پهباد با 18 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "buy_5_drones":
-        if gems >= 30:
-            user_data["gems"] -= 30
-            user_data["drones"] += 5
-            await query.message.reply_text("✅ 5 پهباد با 30 جم خریداری شد!")
-        else:
-            await query.message.reply_text("⛔ جم کافی ندارید!")
-    
-    elif query.data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    save_data(context)
-    await buy_drones(update, context)
-
-# 📌 هندلر برای اطلاعات کشتی
-async def ship_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    gems = user_data.get("gems", 5)
-    gold = user_data.get("gold", 10)
-    silver = user_data.get("silver", 15)
-    wins = user_data.get("wins", 0)
-    games = user_data.get("games", 0)
-    energy = user_data.get("energy", 100)
-    attack = user_data.get("attack_strategy", 50)
-    defense = user_data.get("defense_strategy", 50)
-    strategy = user_data.get("current_strategy", "balanced")
-    score = user_data.get("score", 0)
-    level = user_data.get("level", 1)
-    
-    strategy_text = {
-        "aggressive": "حمله گرایانه 🗡️",
-        "defensive": "دفاعی 🛡️",
-        "balanced": "متوازن ⚖️"
-    }
-    
-    win_rate = (wins / games * 100) if games > 0 else 0
-    text = (
-        "📕 اطلاعات کشتی 🌟:\n"
-        f"💎 جم: {gems}\n"
-        f"🪙 کیسه طلا: {gold}\n"
-        f"🥈 شمش نقره: {silver}\n"
-        f"🏆 میانگین پیروزی: {win_rate:.1f}%\n"
-        f"⚡ انرژی: {energy}%\n"
-        f"⚔️ استراتژی فعلی: {strategy_text.get(strategy, 'متوازن ⚖️')}\n"
-        f"🗡️ قدرت حمله: {attack}%\n"
-        f"🛡️ قدرت دفاع: {defense}%\n"
-        f"🌟 لِوِل: {level}\n"
-        f"📊 امتیاز: {score}"
-    )
-    await update.message.reply_text(text)
-
-# 📌 هندلر برای انرژی جنگجویان
-async def warriors_energy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    user_data = context.bot_data["user_data"][user_id]
-    energy = user_data.get("energy", 100)
-    now = datetime.now()
-    last_purchase = user_data.get("last_purchase", {})
-    
-    available_items = []
-    items = [
-        ("۱ بسته بیسکویت دریایی (۲۵٪ ⚡ انرژی)", "biscuit", 0, 4, 25),
-        ("۵ عدد ماهی خشک (۳۵٪ ⚡ انرژی)", "fish", 1, 1, 35),
-        ("۳ بسته میوه خشک‌شده (۳۰٪ ⚡ انرژی)", "fruit", 1, 0, 30),
-        ("۱۰ قالب پنیر کهنه (۵۰٪ ⚡ انرژی)", "cheese", 1, 3, 50),
-        ("۱۰ بطری آب (۲۰٪ ⚡ انرژی)", "water", 0, 3, 20),
-    ]
-    
-    for item_name, item_id, gold_cost, silver_cost, energy_gain in items:
-        last_time = last_purchase.get(item_id)
-        if not last_time or (now - last_time).total_seconds() >= 24 * 3600:
-            available_items.append(
-                [InlineKeyboardButton(f"{item_name} - قیمت: {gold_cost} 🪙, {silver_cost} 🥈", callback_data=f"buy_{item_id}")]
-            )
-    
-    reply_markup = InlineKeyboardMarkup(available_items) if available_items else None
-    text = f"⚡ انرژی جنگجویان: {energy}%\n"
-    if energy < 100:
-        text += "🏴‍☠️ اگر جنگجویان خسته‌اند، خوراکی بخر! 🌟"
     else:
-        text += "✅ جنگجویان پر از انرژی‌اند! 💪"
-    
-    await update.message.reply_text(text, reply_markup=reply_markup)
+        keyboard = [
+            [KeyboardButton("🥉۱ ماهه | ۹۰ هزار تومان | نامحدود")],
+            [KeyboardButton("🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود")],
+            [KeyboardButton("🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود")],
+            [KeyboardButton("⬅️ بازگشت به منو")]
+        ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# 📌 هندلر برای خرید جم
-async def handle_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    data = query.data
-    gems = 0
-    tron = 0
-    if data == "buy_25_gems":
-        gems, tron = 25, 5
-    elif data == "buy_50_gems":
-        gems, tron = 50, 8
-    elif data == "buy_100_gems":
-        gems, tron = 100, 14
-    elif data == "back_to_shop":
-        await shop(update, context)
-        await query.message.delete()
-        return
-    
-    if gems:
-        context.bot_data["user_data"][user_id]["pending_gems"] = gems
-        await query.message.reply_text(
-            f"💎 لطفاً {tron} ترون به آدرس زیر بفرست و فیش پرداخت رو بفرست: 🌐\nTJ4xrw8KJz7jk6FjkVqRw8h3Az5Ur4kLkb"
-        )
-    save_data(context)
-
-# 📌 هندلر برای دریافت فیش پرداخت
-async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    pending_gems = context.bot_data["user_data"][user_id].get("pending_gems", 0)
-    
-    if pending_gems == 0:
-        await update.message.reply_text("⛔ هیچ خریدی در انتظار تأیید نیست!")
-        return
-    
+def get_payment_method_keyboard():
     keyboard = [
-        [InlineKeyboardButton("تأیید ✅", callback_data=f"confirm_{user_id}_{pending_gems}")],
-        [InlineKeyboardButton("رد ❌", callback_data=f"reject_{user_id}")]
+        [KeyboardButton("🏦 کارت به کارت")],
+        [KeyboardButton("💎 پرداخت با ترون")],
+        [KeyboardButton("💰 پرداخت با موجودی")],
+        [KeyboardButton("⬅️ بازگشت به منو")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    if update.message.photo:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=update.message.photo[-1].file_id,
-            caption=f"💰 فیش پرداخت از کاربر {user_id} برای {pending_gems} جم 🌟",
-            reply_markup=reply_markup
-        )
-    elif update.message.text:
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_connection_guide_keyboard():
+    keyboard = [
+        [KeyboardButton("📗 اندروید")],
+        [KeyboardButton("📕 آیفون/مک")],
+        [KeyboardButton("📘 ویندوز")],
+        [KeyboardButton("📙 لینوکس")],
+        [KeyboardButton("⬅️ بازگشت به منو")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ---------- تابع کمکی برای ارسال پیام‌های طولانی ----------
+async def send_long_message(chat_id, text, context, reply_markup=None, parse_mode=None):
+    max_message_length = 4000
+    if len(text) <= max_message_length:
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+
+    messages = []
+    current_message = ""
+    for line in text.split("\n"):
+        if len(current_message) + len(line) + 1 > max_message_length:
+            messages.append(current_message)
+            current_message = line + "\n"
+        else:
+            current_message += line + "\n"
+    if current_message:
+        messages.append(current_message)
+
+    for i, msg in enumerate(messages):
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"💰 فیش متنی از کاربر {user_id} برای {pending_gems} جم:\n{update.message.text} 🌟",
-            reply_markup=reply_markup
+            chat_id=chat_id,
+            text=msg,
+            reply_markup=reply_markup if i == len(messages) - 1 else None,
+            parse_mode=parse_mode
         )
-    
-    await update.message.reply_text("💌 فیش به ادمین ارسال شد! منتظر تأیید باش ⏳")
-    save_data(context)
 
-# 📌 هندلر برای تأیید/رد فیش توسط ادمین
-async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    data = query.data
-    if data.startswith("confirm_"):
-        _, user_id, gems = data.split("_")
-        user_id, gems = int(user_id), int(gems)
-        context.bot_data["user_data"][user_id]["gems"] += gems
-        context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, f"✅ 💎 خریدت تأیید شد! {gems} جم اضافه شد! 🎉")
-        await query.message.edit_reply_markup(reply_markup=None)
-    elif data.startswith("reject_"):
-        _, user_id = data.split("_")
-        user_id = int(user_id)
-        context.bot_data["user_data"][user_id]["pending_gems"] = 0
-        await context.bot.send_message(user_id, "⛔ خریدت رد شد! دوباره تلاش کن 😞")
-        await query.message.edit_reply_markup(reply_markup=None)
-    save_data(context)
+# ---------- توابع DB ----------
+async def is_user_member(user_id):
+    try:
+        member = await application.bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception:
+        return False
 
-# 📌 هندلر برای خرید خوراکی
-async def handle_food_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-    
-    data = query.data
-    now = datetime.now()
-    items = {
-        "buy_biscuit": (0, 4, 25),
-        "buy_fish": (1, 1, 35),
-        "buy_fruit": (1, 0, 30),
-        "buy_cheese": (1, 3, 50),
-        "buy_water": (0, 3, 20),
-    }
-    
-    if data in items:
-        gold_cost, silver_cost, energy_gain = items[data]
-        gold = context.bot_data["user_data"][user_id]["gold"]
-        silver = context.bot_data["user_data"][user_id]["silver"]
-        energy = context.bot_data["user_data"][user_id]["energy"]
+async def ensure_user(user_id, username, invited_by=None):
+    try:
+        row = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        if not row:
+            await db_execute(
+                "INSERT INTO users (user_id, username, invited_by, is_agent) VALUES (%s, %s, %s, FALSE)",
+                (user_id, username, invited_by)
+            )
+            if invited_by and invited_by != user_id:
+                inviter = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
+                if inviter:
+                    await add_balance(invited_by, 25000)
+        logging.info(f"User {user_id} ensured in database")
+    except Exception as e:
+        logging.error(f"Error ensuring user {user_id}: {e}")
+
+async def set_user_agent(user_id):
+    try:
+        await db_execute("UPDATE users SET is_agent = TRUE WHERE user_id = %s", (user_id,))
+        logging.info(f"User {user_id} set as agent")
+    except Exception as e:
+        logging.error(f"Error setting user {user_id} as agent: {e}")
+
+async def is_user_agent(user_id):
+    try:
+        row = await db_execute("SELECT is_agent FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return row[0] if row and row[0] is not None else False
+    except Exception as e:
+        logging.error(f"Error checking agent status for user_id {user_id}: {e}")
+        return False
+
+async def save_user_phone(user_id, phone):
+    try:
+        await db_execute("UPDATE users SET phone = %s WHERE user_id = %s", (phone, user_id))
+        logging.info(f"Phone saved for user_id {user_id}")
+    except Exception as e:
+        logging.error(f"Error saving user phone for user_id {user_id}: {e}")
+        return None
+
+async def get_user_phone(user_id):
+    try:
+        row = await db_execute("SELECT phone FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return row[0] if row else None
+    except Exception as e:
+        logging.error(f"Error getting user phone for user_id {user_id}: {e}")
+        return None
+
+async def add_balance(user_id, amount):
+    try:
+        await db_execute("UPDATE users SET balance = COALESCE(balance,0) + %s WHERE user_id = %s", (amount, user_id))
+        logging.info(f"Added {amount} to balance for user_id {user_id}")
+    except Exception as e:
+        logging.error(f"Error adding balance for user_id {user_id}: {e}")
+
+async def deduct_balance(user_id, amount):
+    try:
+        await db_execute("UPDATE users SET balance = COALESCE(balance,0) - %s WHERE user_id = %s", (amount, user_id))
+        logging.info(f"Deducted {amount} from balance for user_id {user_id}")
+    except Exception as e:
+        logging.error(f"Error deducting balance for user_id {user_id}: {e}")
+
+async def get_balance(user_id):
+    try:
+        row = await db_execute("SELECT balance FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception as e:
+        logging.error(f"Error getting balance for user_id {user_id}: {e}")
+        return 0
+
+async def add_payment(user_id, amount, ptype, payment_method, description=""):
+    try:
+        query = "INSERT INTO payments (user_id, amount, status, type, payment_method, description) VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING id"
+        new_id = await db_execute(query, (user_id, amount, ptype, payment_method, description), returning=True)
+        logging.info(f"Payment added for user_id {user_id}, amount: {amount}, type: {ptype}, payment_method: {payment_method}, id: {new_id}")
+        return int(new_id) if new_id is not None else None
+    except Exception as e:
+        logging.error(f"Error adding payment for user_id {user_id}: {e}")
+        return None
+
+async def add_subscription(user_id, payment_id, plan):
+    try:
+        duration_mapping = {
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": 30,
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": 90,
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": 180,
+            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود": 30,
+            "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود": 90,
+            "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود": 180
+        }
+        duration_days = duration_mapping.get(plan, 30)
+        await db_execute(
+            "INSERT INTO subscriptions (user_id, payment_id, plan, status, start_date, duration_days) VALUES (%s, %s, %s, 'pending', CURRENT_TIMESTAMP, %s)",
+            (user_id, payment_id, plan, duration_days)
+        )
+        logging.info(f"Subscription added for user_id {user_id}, payment_id: {payment_id}, plan: {plan}, duration: {duration_days} days, status: pending")
+    except Exception as e:
+        logging.error(f"Error adding subscription for user_id {user_id}, payment_id: {payment_id}: {e}")
+        raise
+
+async def update_subscription_config(payment_id, config):
+    try:
+        await db_execute(
+            "UPDATE subscriptions SET config = %s, status = 'active' WHERE payment_id = %s",
+            (config, payment_id)
+        )
+        logging.info(f"Subscription config updated and set to active for payment_id {payment_id}")
+    except Exception as e:
+        logging.error(f"Error updating subscription config for payment_id {payment_id}: {e}")
+
+async def update_payment_status(payment_id, status):
+    try:
+        await db_execute("UPDATE payments SET status = %s WHERE id = %s", (status, payment_id))
+        logging.info(f"Payment status updated to {status} for payment_id {payment_id}")
+    except Exception as e:
+        logging.error(f"Error updating payment status for payment_id {payment_id}: {e}")
+
+async def get_user_subscriptions(user_id):
+    try:
+        rows = await db_execute(
+            """
+            SELECT s.id, s.plan, s.config, s.status, s.payment_id, s.start_date, s.duration_days, u.username
+            FROM subscriptions s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            WHERE s.user_id = %s
+            ORDER BY s.status DESC, s.start_date DESC
+            """,
+            (user_id,), fetch=True
+        )
+        logging.info(f"Fetched {len(rows)} subscriptions for user_id {user_id}")
+        current_time = datetime.now()
+        subscriptions = []
+        for row in rows:
+            try:
+                sub_id, plan, config, status, payment_id, start_date, duration_days, username = row
+                start_date = start_date or current_time
+                duration_days = duration_days or 30
+                username = username or str(user_id)
+                if status == "active":
+                    end_date = start_date + timedelta(days=duration_days)
+                    if current_time > end_date:
+                        await db_execute("UPDATE subscriptions SET status = 'inactive' WHERE id = %s", (sub_id,))
+                        status = "inactive"
+                subscriptions.append({
+                    'id': sub_id,
+                    'plan': plan,
+                    'config': config,
+                    'status': status,
+                    'payment_id': payment_id,
+                    'start_date': start_date,
+                    'duration_days': duration_days,
+                    'username': username,
+                    'end_date': start_date + timedelta(days=duration_days)
+                })
+            except Exception as e:
+                logging.error(f"Error processing subscription {sub_id} for user_id {user_id}: {e}")
+                continue
+        logging.info(f"Processed {len(subscriptions)} subscriptions for user_id {user_id}")
+        return subscriptions
+    except Exception as e:
+        logging.error(f"Error in get_user_subscriptions for user_id {user_id}: {e}")
+        return []
+
+# ---------- دستور تشخیصی برای ادمین ----------
+async def debug_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⚠️ شما اجازه دسترسی به این دستور را ندارید.")
+        return
+    try:
+        rows = await db_execute(
+            """
+            SELECT s.user_id, u.username, s.plan, s.payment_id, s.start_date, s.duration_days, s.status
+            FROM subscriptions s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            ORDER BY s.status DESC, s.start_date DESC
+            """,
+            fetch=True
+        )
+        if not rows:
+            await update.message.reply_text("📂 هیچ اشتراکی برای هیچ کاربری یافت نشد.")
+            return
+
+        response = "📂 لیست تمام اشتراک‌های کاربران:\n\n"
+        current_time = datetime.now()
+        for row in rows:
+            user_id, username, plan, payment_id, start_date, duration_days, status = row
+            username_display = f"@{username}" if username else f"@{user_id}"
+            start_date = start_date if start_date else current_time
+            duration_days = duration_days if duration_days else 30
+            remaining_days = 0
+            if status == "active":
+                end_date = start_date + timedelta(days=duration_days)
+                remaining_days = max(0, (end_date - current_time).days)
+            response += f"کاربر: {username_display}\n"
+            response += f"اشتراک: {plan}\n"
+            response += f"کد خرید: #{payment_id}\n"
+            response += f"وضعیت: {'فعال' if status == 'active' else 'غیرفعال'}\n"
+            response += f"زمان باقی‌مانده: {remaining_days} روز\n"
+            response += "--------------------\n"
         
-        if gold >= gold_cost and silver >= silver_cost:
-            context.bot_data["user_data"][user_id]["gold"] -= gold_cost
-            context.bot_data["user_data"][user_id]["silver"] -= silver_cost
-            context.bot_data["user_data"][user_id]["energy"] = min(100, energy + energy_gain)
-            context.bot_data["user_data"][user_id]["last_purchase"][data.replace("buy_", "")] = now
-            await query.message.reply_text(f"✅ 🌟 خرید انجام شد! {energy_gain}% ⚡ انرژی اضافه شد! 🎉")
+        await send_long_message(update.effective_user.id, response, context)
+    except Exception as e:
+        logging.error(f"Error in debug_subscriptions: {e}")
+        await update.message.reply_text(f"⚠️ خطا در بررسی اشتراک‌ها: {str(e)}")
+
+# ---------- وضعیت کاربر در مموری ----------
+user_states = {}
+
+# ---------- دستورات و هندلرها ----------
+async def set_bot_commands():
+    try:
+        public_commands = [
+            BotCommand(command="/start", description="شروع ربات")
+        ]
+        admin_commands = [
+            BotCommand(command="/start", description="شروع ربات"),
+            BotCommand(command="/debug_subscriptions", description="تشخیص اشتراک‌ها (ادمین)"),
+            BotCommand(command="/cleardb", description="پاک کردن دیتابیس (ادمین)"),
+            BotCommand(command="/stats", description="آمار ربات (ادمین)"),
+            BotCommand(command="/numbers", description="نمایش شماره‌های کاربران (ادمین)")
+        ]
+        await application.bot.set_my_commands(public_commands)
+        await application.bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": ADMIN_ID})
+        logging.info("Bot commands set successfully")
+    except Exception as e:
+        logging.error(f"Error setting bot commands: {e}")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    username = user.username or ""
+
+    if not await is_user_member(user_id):
+        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{CHANNEL_USERNAME.replace('@','')}")]]
+        await update.message.reply_text(
+            "❌ برای استفاده از ربات، ابتدا در کانال ما عضو شوید و سپس مجدد /start را بزنید.",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+        return
+
+    invited_by = context.user_data.get("invited_by")
+    await ensure_user(user_id, username, invited_by)
+
+    phone = await get_user_phone(user_id)
+    if phone:
+        await update.message.reply_text(
+            "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
+            reply_markup=get_main_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    contact_keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True
+    )
+    await update.message.reply_text(
+        "✅ لطفا شماره تماس خود را ارسال کنید.",
+        reply_markup=contact_keyboard
+    )
+    user_states[user_id] = "awaiting_contact"
+
+async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_states.get(user_id) != "awaiting_contact":
+        return
+    contact = update.message.contact
+    if contact is None or contact.user_id != user_id:
+        await update.message.reply_text("⚠️ لطفا شماره تماس خود را از طریق دکمه ارسال کنید.")
+        return
+
+    phone_number = contact.phone_number
+    await save_user_phone(user_id, phone_number)
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"📞 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) شماره تماس خود را ارسال کرد:\n{phone_number}"
+    )
+
+    row = await db_execute("SELECT invited_by FROM users WHERE user_id = %s", (user_id,), fetchone=True)
+    invited_by = row[0] if row and row[0] else None
+    if invited_by and invited_by != user_id:
+        inviter_exists = await db_execute("SELECT user_id FROM users WHERE user_id = %s", (invited_by,), fetchone=True)
+        if inviter_exists:
+            await context.bot.send_message(
+                chat_id=invited_by,
+                text=f"🎉 دوست شما (@{update.effective_user.username or 'NoUsername'}) با موفقیت مراحل ثبت‌نام را تکمیل کرد!\n💰 ۲۵,۰۰۰ تومان به موجودی شما اضافه شد."
+            )
+
+    await update.message.reply_text(
+        "🌐 به فروشگاه تیز VPN خوش آمدید!\n\nیک گزینه را انتخاب کنید:",
+        reply_markup=get_main_keyboard()
+    )
+    user_states.pop(user_id, None)
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text if update.message.text else ""
+
+    if user_states.get(user_id) == "awaiting_contact":
+        contact_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("ارسال شماره تماس", request_contact=True)]], 
+            resize_keyboard=True, 
+            one_time_keyboard=True
+        )
+        await update.message.reply_text(
+            "⚠️ لطفا ابتدا شماره تماس خود را از طریق دکمه ارسال کنید.",
+            reply_markup=contact_keyboard
+        )
+        return
+
+    if text in ["بازگشت به منو", "⬅️ بازگشت به منو"]:
+        await update.message.reply_text("🌐 منوی اصلی:", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
+
+    if update.message.photo or update.message.document or update.message.text:
+        state = user_states.get(user_id)
+        if state and (
+            state.startswith("awaiting_deposit_receipt_") or 
+            state.startswith("awaiting_subscription_receipt_") or 
+            state.startswith("awaiting_agency_receipt_")
+        ):
+            try:
+                payment_id = int(state.split("_")[-1])
+            except:
+                payment_id = None
+
+            if payment_id:
+                payment = await db_execute("SELECT amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+                if payment:
+                    amount, ptype, description = payment
+                    caption = f"💳 فیش پرداختی از کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}):\n"
+                    caption += f"مبلغ: {amount}\nنوع: {ptype if ptype != 'agency_request' else 'درخواست نمایندگی'}"
+
+                    keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("✅ تایید", callback_data=f"approve_{payment_id}"),
+                            InlineKeyboardButton("❌ رد", callback_data=f"reject_{payment_id}")
+                        ]
+                    ])
+
+                    if update.message.photo:
+                        file_id = update.message.photo[-1].file_id
+                        await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=caption, reply_markup=keyboard)
+                    else:
+                        doc_id = update.message.document.file_id
+                        await context.bot.send_document(chat_id=ADMIN_ID, document=doc_id, caption=caption, reply_markup=keyboard)
+
+                    await update.message.reply_text("✅ فیش شما برای ادمین ارسال شد، لطفا منتظر تایید باشید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                    return
+        elif state and state.startswith("awaiting_config_"):
+            try:
+                payment_id = int(state.split("_")[-1])
+            except:
+                payment_id = None
+
+            if payment_id:
+                payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+                if payment:
+                    buyer_id, description = payment
+                    if update.message.text:
+                        config = update.message.text
+                        await update_subscription_config(payment_id, config)
+                        await context.bot.send_message(
+                            chat_id=buyer_id,
+                            text=f"✅ کانفیگ اشتراک شما ({description})\nکد خرید: #{payment_id}\nدریافت شد:\n```\n{config}\n```",
+                            parse_mode="Markdown"
+                        )
+                        await update.message.reply_text("✅ کانفیگ با موفقیت به خریدار ارسال شد.", reply_markup=None)
+                        user_states.pop(user_id, None)
+                    else:
+                        await update.message.reply_text("⚠️ لطفا کانفیگ را به صورت متن ارسال کنید.")
+                    return
+
+    if text == "💰 موجودی":
+        await update.message.reply_text("💰 بخش موجودی:\nیک گزینه را انتخاب کنید:", reply_markup=get_balance_keyboard())
+        user_states.pop(user_id, None)
+        return
+
+    if text == "نمایش موجودی":
+        bal = await get_balance(user_id)
+        await update.message.reply_text(f"💰 موجودی شما: {bal} تومان", reply_markup=get_balance_keyboard())
+        user_states.pop(user_id, None)
+        return
+
+    if text == "افزایش موجودی":
+        await update.message.reply_text("💳 لطفا مبلغ واریزی را به تومان وارد کنید (مثال: 90000):", reply_markup=get_back_keyboard())
+        user_states[user_id] = "awaiting_deposit_amount"
+        return
+
+    if user_states.get(user_id) == "awaiting_deposit_amount":
+        if text.isdigit():
+            amount = int(text)
+            payment_id = await add_payment(user_id, amount, "increase_balance", "card_to_card")
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`\n\n"
+                    f"یا\n\n🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_deposit_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
         else:
-            await query.message.reply_text("⛔ 🪙 یا 🥈 کافی نیست! 😞")
-        await query.message.delete()
-        await warriors_energy(update, context)
-    save_data(context)
+            await update.message.reply_text("⚠️ لطفا عدد وارد کنید.", reply_markup=get_back_keyboard())
+        return
 
-# 📌 هندلر برای پردازش منوی فروشگاه
-async def handle_shop_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    choice = update.message.text
-    
-    if choice == "💎 خرید جم":
-        await buy_gems(update, context)
-    elif choice == "☄️ خرید توپ":
-        await buy_cannons(update, context)
-    elif choice == "🛩️ خرید پهباد":
-        await buy_drones(update, context)
-    elif choice == "🔙 بازگشت به منو":
-        await back_to_menu(update, context)
+    if text == "💳 خرید اشتراک":
+        is_agent = await is_user_agent(user_id)
+        await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent))
+        user_states.pop(user_id, None)
+        return
 
-# 🔗 ثبت هندلرها
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.Regex("^🛒 فروشگاه$"), shop))
-application.add_handler(MessageHandler(filters.Regex("^📕 اطلاعات کشتی$"), ship_info))
-application.add_handler(MessageHandler(filters.Regex("^⚡️ انرژی جنگجویان$"), warriors_energy))
-application.add_handler(MessageHandler(filters.Regex("^⚔️ شروع بازی$"), start_game))
-application.add_handler(MessageHandler(filters.Regex("^🏴‍☠️ برترین ناخدایان$"), top_captains))
-application.add_handler(MessageHandler(filters.Regex("^(دریانوردی ⛵️|توپ ☄️|پهباد 🛩️|بازگشت به منو 🔙|استراتژی ⚔️)$"), handle_game_options))
-application.add_handler(MessageHandler(filters.Regex("^(حمله گرایانه 🗡️|دفاعی 🛡️)$"), set_strategy))
-application.add_handler(MessageHandler(filters.Regex("^(0%|10%|20%|35%|50%|65%|80%|90%|100%)$"), handle_strategy_input))
-application.add_handler(MessageHandler(filters.Regex("^(💎 خرید جم|☄️ خرید توپ|🛩️ خرید پهباد|🔙 بازگشت به منو)$"), handle_shop_menu))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex("^(🛒|📕|⚡️|⚔️|🏴‍☠️|دریانوردی ⛵️|توپ ☄️|پهباد 🛩️|بازگشت به منو 🔙|استراتژی ⚔️|حمله گرایانه 🗡️|دفاعی 🛡️|0%|10%|20%|35%|50%|65%|80%|90%|100%|💎 خرید جم|☄️ خرید توپ|🛩️ خرید پهباد|🔙 بازگشت به منو)$") & filters.UpdateType.MESSAGE, handle_username))
-application.add_handler(CallbackQueryHandler(handle_purchase, pattern="buy_.*_gems"))
-application.add_handler(CallbackQueryHandler(handle_food_purchase, pattern="buy_(biscuit|fish|fruit|cheese|water)"))
-application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="(confirm|reject)_.*"))
-application.add_handler(CallbackQueryHandler(handle_cannon_purchase, pattern="buy_[0-9]+_cannon(s)?"))
-application.add_handler(CallbackQueryHandler(handle_drone_purchase, pattern="buy_[0-9]+_drone(s)?"))
-application.add_handler(CallbackQueryHandler(handle_friend_game, pattern="^(request_friend_game|accept_friend_game|reject_friend_game|back_to_menu|back_to_shop)_.*"))
-application.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, handle_receipt))
+    if text in [
+        "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود", "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود", "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود",
+        "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود", "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود", "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود"
+    ]:
+        mapping = {
+            "🥉۱ ماهه | ۹۰ هزار تومان | نامحدود": (90000, 0),
+            "🥈۳ ماهه | ۲۵۰ هزار تومان | نامحدود": (250000, 1),
+            "🥇۶ ماهه | ۴۵۰ هزار تومان | نامحدود": (450000, 2),
+            "🥉۱ ماهه | ۷۰,۰۰۰ تومان | نامحدود": (70000, 0),
+            "🥈۳ ماهه | ۲۲۰,۰۰۰ تومان | نامحدود": (220000, 1),
+            "🥇۶ ماهه | ۴۰۰,۰۰۰ تومان | نامحدود": (400000, 2)
+        }
+        amount, plan_index = mapping.get(text, (0, -1))
+        if plan_index == -1:
+            await update.message.reply_text("⚠️ خطا در انتخاب پلن. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+        
+        user_states[user_id] = f"awaiting_payment_method_{amount}_{text}"
+        logging.info(f"Set user state for user_id {user_id}: {user_states[user_id]}")
+        await update.message.reply_text("💳 روش خرید را انتخاب کنید:", reply_markup=get_payment_method_keyboard())
+        return
 
-# 🔁 وب‌هوک تلگرام
+    if user_states.get(user_id, "").startswith("awaiting_payment_method_"):
+        state = user_states.get(user_id)
+        logging.info(f"Processing payment method for user_id {user_id}, state: {state}")
+        try:
+            parts = state.split("_")
+            amount = int(parts[3])
+            plan = "_".join(parts[4:])
+            
+            if text == "🏦 کارت به کارت":
+                payment_id = await add_payment(user_id, amount, "buy_subscription", "card_to_card", description=plan)
+                if payment_id:
+                    await add_subscription(user_id, payment_id, plan)
+                    await update.message.reply_text(
+                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                        f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                        reply_markup=get_back_keyboard(),
+                        parse_mode="MarkdownV2"
+                    )
+                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                return
+
+            if text == "💎 پرداخت با ترون":
+                payment_id = await add_payment(user_id, amount, "buy_subscription", "tron", description=plan)
+                if payment_id:
+                    await add_subscription(user_id, payment_id, plan)
+                    await update.message.reply_text(
+                        f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                        f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+                        reply_markup=get_back_keyboard(),
+                        parse_mode="MarkdownV2"
+                    )
+                    user_states[user_id] = f"awaiting_subscription_receipt_{payment_id}"
+                    logging.info(f"Set state to awaiting_subscription_receipt_{payment_id} for user_id {user_id}")
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+                return
+
+            if text == "💰 پرداخت با موجودی":
+                balance = await get_balance(user_id)
+                if balance >= amount:
+                    payment_id = await add_payment(user_id, amount, "buy_subscription", "balance", description=plan)
+                    if payment_id:
+                        await add_subscription(user_id, payment_id, plan)
+                        await deduct_balance(user_id, amount)
+                        await update_payment_status(payment_id, "approved")
+                        await update.message.reply_text(
+                            "✅ خرید شما با موفقیت انجام شد. حداکثر تا ۱ ساعت دیگر کانفیگ برای شما ارسال خواهد شد.",
+                            reply_markup=get_main_keyboard()
+                        )
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود سرویس {plan} خریداری کرد."
+                        )
+                        config_keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                        ])
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"✅ پرداخت برای اشتراک ({plan}) تایید شد.",
+                            reply_markup=config_keyboard
+                        )
+                        user_states.pop(user_id, None)
+                        logging.info(f"Payment with balance successful for user_id {user_id}, payment_id: {payment_id}")
+                    else:
+                        await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                        user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text(
+                        f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    user_states.pop(user_id, None)
+                return
+
+        except Exception as e:
+            logging.error(f"Error processing payment method for user_id {user_id}, state: {state}, error: {e}")
+            await update.message.reply_text("⚠️ خطا در پردازش. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+            user_states.pop(user_id, None)
+            return
+
+    if text == "🎁 اشتراک تست رایگان":
+        await update.message.reply_text(
+            "🎁 برای دریافت اشتراک تست رایگان، لطفا با پشتیبانی تماس بگیرید: https://t.me/teazadmin",
+            reply_markup=get_main_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "☎️ پشتیبانی":
+        await update.message.reply_text("📞 پشتیبانی: https://t.me/teazadmin", reply_markup=get_main_keyboard())
+        user_states.pop(user_id, None)
+        return
+
+    if text == "💵 اعتبار رایگان":
+        invite_link = f"https://t.me/teazvpn_bot?start={user_id}"
+        try:
+            with open("invite_image.jpg", "rb") as photo:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo,
+                    caption=f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                           "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                    reply_markup=get_main_keyboard()
+                )
+        except Exception as e:
+            logging.error(f"Error sending invite image: {e}")
+            await update.message.reply_text(
+                f"💵 لینک اختصاصی شما برای دعوت دوستان:\n{invite_link}\n\n"
+                "برای هر دعوت موفق، ۲۵,۰۰۰ تومان به موجودی شما اضافه خواهد شد.",
+                reply_markup=get_main_keyboard()
+            )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📂 اشتراک‌های من":
+        try:
+            subscriptions = await get_user_subscriptions(user_id)
+            if not subscriptions:
+                await update.message.reply_text("📂 شما هنوز اشتراکی ندارید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+                return
+            
+            current_time = datetime.now()
+            response = "📂 لیست کامل اشتراک‌های شما:\n\n"
+            
+            for sub in subscriptions:
+                try:
+                    response += f"🔹 اشتراک #{sub['id']}\n"
+                    response += f"📌 پلن: {sub['plan']}\n"
+                    response += f"🆔 کد خرید: #{sub['payment_id']}\n"
+                    response += f"📊 وضعیت: {'✅ فعال' if sub['status'] == 'active' else '⏳ در انتظار'}\n"
+                    
+                    if sub['status'] == "active":
+                        remaining_days = max(0, (sub['end_date'] - current_time).days)
+                        response += f"⏳ زمان باقی‌مانده: {remaining_days} روز\n"
+                        response += f"📅 تاریخ شروع: {sub['start_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                        response += f"📅 تاریخ انقضا: {sub['end_date'].strftime('%Y-%m-%d %H:%M')}\n"
+                    
+                    if sub['config']:
+                        response += f"🔐 کانفیگ:\n```\n{sub['config']}\n```\n"
+                    
+                    response += "------------------------\n\n"
+                    
+                except Exception as e:
+                    logging.error(f"Error processing subscription {sub['id']} for user_id {user_id}: {e}")
+                    continue
+            
+            await send_long_message(user_id, response, context, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+            
+        except Exception as e:
+            logging.error(f"Error displaying subscriptions for user_id {user_id}: {e}")
+            await update.message.reply_text("⚠️ خطا در نمایش اشتراک‌ها. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+        
+        user_states.pop(user_id, None)
+        return
+
+    if text == "💡 راهنمای اتصال":
+        await update.message.reply_text(
+            "راهنمای راه‌اندازی\nدستگاه خود را انتخاب کنید:",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📗 اندروید":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های V2RayNG یا Hiddify(پیشنهادی) است ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📕 آیفون/مک":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن‌های Singbox(پیشنهادی) یا Streisand یا V2box(پیشنهادی) هست ✅\n"
+            "با این برنامه‌ها می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📘 ویندوز":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
+            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "📙 لینوکس":
+        await update.message.reply_text(
+            "برای استفاده از کانفیگ، پیشنهاد ما استفاده از اپلیکیشن V2rayN هست ✅\n"
+            "با این برنامه‌ می‌تونی خیلی راحت و سریع کانفیگ رو وارد کنی و به اینترنت بدون محدودیت وصل بشی 🚀",
+            reply_markup=get_connection_guide_keyboard()
+        )
+        user_states.pop(user_id, None)
+        return
+
+    if text == "🧑‍💼 درخواست نمایندگی":
+        is_agent = await is_user_agent(user_id)
+        if is_agent:
+            await update.message.reply_text("💳 پلن را انتخاب کنید:", reply_markup=get_subscription_keyboard(is_agent=True))
+            user_states.pop(user_id, None)
+            return
+
+        agency_text = (
+            "🚀 اعطای نمایندگی رسمی تیز وی پی ان 🚀\n\n"
+            "اگر به دنبال یک فرصت درآمدزایی پایدار و بدون محدودیت هستید، حالا بهترین زمان برای پیوستن به تیم ماست!\n"
+            "ما به تعداد محدودی نماینده رسمی می‌پذیریم که بتوانند با فروش سرویس‌های پرسرعت و پایدار تیز وی پی ان، کسب‌وکار خودشان را راه‌اندازی کنند.\n\n"
+            "💰 شرایط دریافت نمایندگی:\n"
+            "برای شروع همکاری و فعال‌سازی پنل اختصاصی، کافیست ۱ میلیون تومان واریز کنید.\n"
+            "پس از واریز، شما به یک پنل کامل و شخصی دسترسی خواهید داشت که امکان ساخت و مدیریت اکانت‌ها را برایتان فراهم می‌کند.\n\n"
+            "📦 قیمت پلن‌ها برای نمایندگان:\n"
+            "🥉 یک ماهه | ۷۰,۰۰۰ تومان | نامحدود (٪۲۲ کاهش)\n"
+            "🥈 سه ماهه | ۲۲۰,۰۰۰ تومان | نامحدود (٪۱۲ کاهش)\n"
+            "🥇 شش ماهه | ۴۰۰,۰۰۰ تومان | نامحدود (٪۱۱ کاهش)\n\n"
+            "🔹 اکانت‌ها کاملاً نامحدود هستند (بدون محدودیت حجم یا سرعت)\n"
+            "🔹 شما تعیین‌کننده قیمت فروش به مشتری هستید\n"
+            "🔹 پشتیبانی کامل و ۲۴ ساعته\n\n"
+            "🔻 در صورت تایید موارد بالا روش پرداخت خود را انتخاب کنید"
+        )
+        await update.message.reply_text(agency_text, reply_markup=get_payment_method_keyboard())
+        user_states[user_id] = "awaiting_agency_payment_method"
+        return
+
+    if user_states.get(user_id) == "awaiting_agency_payment_method":
+        amount = 1000000
+        description = "درخواست نمایندگی"
+        if text == "🏦 کارت به کارت":
+            payment_id = await add_payment(user_id, amount, "agency_request", "card_to_card", description=description)
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"🏦 شماره کارت بانکی:\n`{BANK_CARD}`\nفرهنگ",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+
+        if text == "💎 پرداخت با ترون":
+            payment_id = await add_payment(user_id, amount, "agency_request", "tron", description=description)
+            if payment_id:
+                await update.message.reply_text(
+                    f"لطفا {amount} تومان واریز کنید و فیش را ارسال کنید:\n\n"
+                    f"💎 آدرس کیف پول TRON:\n`{TRON_ADDRESS}`",
+                    reply_markup=get_back_keyboard(),
+                    parse_mode="MarkdownV2"
+                )
+                user_states[user_id] = f"awaiting_agency_receipt_{payment_id}"
+            else:
+                await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                user_states.pop(user_id, None)
+            return
+
+        if text == "💰 پرداخت با موجودی":
+            balance = await get_balance(user_id)
+            if balance >= amount:
+                payment_id = await add_payment(user_id, amount, "agency_request", "balance", description=description)
+                if payment_id:
+                    await deduct_balance(user_id, amount)
+                    await update_payment_status(payment_id, "approved")
+                    await set_user_agent(user_id)
+                    await add_balance(user_id, amount)  # Add the 1M to balance
+                    await update.message.reply_text(
+                        "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.",
+                        reply_markup=get_main_keyboard()
+                    )
+                    await context.bot.send_message(
+                        chat_id=ADMIN_ID,
+                        text=f"📢 کاربر {user_id} (@{update.effective_user.username or 'NoUsername'}) با موجودی خود نمایندگی خریداری کرد."
+                    )
+                    user_states.pop(user_id, None)
+                else:
+                    await update.message.reply_text("⚠️ خطا در ثبت پرداخت. لطفا دوباره تلاش کنید.", reply_markup=get_main_keyboard())
+                    user_states.pop(user_id, None)
+            else:
+                await update.message.reply_text(
+                    f"⚠️ موجودی شما ({balance} تومان) کافی نیست. لطفا ابتدا موجودی خود را افزایش دهید.",
+                    reply_markup=get_main_keyboard()
+                )
+                user_states.pop(user_id, None)
+            return
+
+    await update.message.reply_text("⚠️ دستور نامعتبر است. لطفا از دکمه‌ها استفاده کنید.", reply_markup=get_main_keyboard())
+    user_states.pop(user_id, None)
+
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    await query.answer()
+
+    if data.startswith("approve_") or data.startswith("reject_") or data.startswith("send_config_"):
+        if update.effective_user.id != ADMIN_ID:
+            await query.message.reply_text("⚠️ شما اجازه این کار را ندارید.")
+            return
+
+        if data.startswith("approve_"):
+            payment_id = int(data.split("_")[1])
+            payment = await db_execute("SELECT user_id, amount, type, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            user_id, amount, ptype, description = payment
+
+            await update_payment_status(payment_id, "approved")
+            if ptype == "increase_balance":
+                await add_balance(user_id, amount)
+                await context.bot.send_message(user_id, f"💰 پرداخت تایید شد. موجودی {amount} تومان اضافه شد.")
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text("✅ پرداخت تایید شد.")
+            elif ptype == "buy_subscription":
+                await context.bot.send_message(user_id, f"✅ پرداخت تایید شد. اشتراک شما (کد خرید: #{payment_id}) ارسال خواهد شد.")
+                config_keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🟣 ارسال کانفیگ", callback_data=f"send_config_{payment_id}")]
+                ])
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text(f"✅ پرداخت برای اشتراک ({description}) تایید شد.", reply_markup=config_keyboard)
+            elif ptype == "agency_request":
+                await set_user_agent(user_id)
+                await add_balance(user_id, amount)  # Add the 1M to balance
+                await context.bot.send_message(user_id, "✅ فیش شما تایید و نمایندگی به شما اعطا شد! ۱,۰۰۰,۰۰۰ تومان به موجودی شما اضافه شد.")
+                await query.message.edit_reply_markup(None)
+                await query.message.reply_text("✅ درخواست نمایندگی تایید شد.")
+
+        elif data.startswith("reject_"):
+            payment_id = int(data.split("_")[1])
+            payment = await db_execute("SELECT user_id, amount, type FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            user_id, amount, ptype = payment
+
+            await update_payment_status(payment_id, "rejected")
+            await context.bot.send_message(user_id, "❌ پرداخت شما رد شد. با پشتیبانی تماس بگیرید.")
+            await query.message.edit_reply_markup(None)
+            await query.message.reply_text("❌ پرداخت رد شد.")
+
+        elif data.startswith("send_config_"):
+            payment_id = int(data.split("_")[-1])
+            payment = await db_execute("SELECT user_id, description FROM payments WHERE id = %s", (payment_id,), fetchone=True)
+            if not payment:
+                await query.message.reply_text("⚠️ پرداخت یافت نشد.")
+                return
+            await query.message.reply_text("لطفا کانفیگ را ارسال کنید.")
+            user_states[ADMIN_ID] = f"awaiting_config_{payment_id}"
+
+async def start_with_param(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if args and len(args) > 0:
+        try:
+            invited_by = int(args[0])
+            if invited_by != update.effective_user.id:
+                context.user_data["invited_by"] = invited_by
+        except:
+            context.user_data["invited_by"] = None
+    await start(update, context)
+
+# ---------- ثبت هندلرها ----------
+application.add_handler(CommandHandler("start", start_with_param))
+application.add_handler(CommandHandler("debug_subscriptions", debug_subscriptions))
+application.add_handler(CommandHandler("cleardb", clear_db))
+application.add_handler(CommandHandler("stats", stats_command))
+application.add_handler(CommandHandler("numbers", numbers_command))
+application.add_handler(MessageHandler(filters.CONTACT, contact_handler))
+application.add_handler(MessageHandler(filters.ALL & (~filters.COMMAND), message_handler))
+application.add_handler(CallbackQueryHandler(admin_callback_handler))
+
+# ---------- webhook endpoint ----------
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -1172,19 +1225,30 @@ async def telegram_webhook(request: Request):
     await application.update_queue.put(update)
     return {"ok": True}
 
-# 🔥 زمان بالا آمدن سرور
+# ---------- lifecycle events ----------
 @app.on_event("startup")
 async def on_startup():
-    load_data(application)
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    print("✅ Webhook set:", WEBHOOK_URL)
+    init_db_pool()
+    await create_tables()
+    try:
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+        logging.info("Webhook set successfully")
+    except Exception as e:
+        logging.error(f"Error setting webhook: {e}")
+    await set_bot_commands()
     await application.initialize()
     await application.start()
+    print("✅ Webhook set:", WEBHOOK_URL)
 
-# 🛑 هنگام خاموشی
 @app.on_event("shutdown")
 async def on_shutdown():
-    save_data(application)
-    await application.updater.stop()
-    await application.stop()
-    await application.shutdown()
+    try:
+        await application.stop()
+        await application.shutdown()
+    finally:
+        close_db_pool()
+
+# ---------- اجرای محلی (برای debug) ----------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
